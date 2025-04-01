@@ -20,6 +20,12 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+const (
+	etcd_server_port        = 2379
+	etcdclient_dial_timeout = 5 * time.Second
+	etcd_namespace          = "hostha"
+)
+
 // etcd client structure
 type Client struct {
 	*clientv3.Client
@@ -33,19 +39,19 @@ type Client struct {
 // 配置结构体
 type Config struct {
 	Etcd struct {
-		Endpoints []string `yaml:"endpoints"`
-		LeaseTTL  int64    `yaml:"lease_ttl"`
+		Services []string `yaml:"services"`
+		LeaseTTL int64    `yaml:"lease_ttl"`
 	} `yaml:"etcd"`
 }
 
 // 默认配置
 var defaultConfig = Config{
 	Etcd: struct {
-		Endpoints []string `yaml:"endpoints"`
-		LeaseTTL  int64    `yaml:"lease_ttl"`
+		Services []string `yaml:"services"`
+		LeaseTTL int64    `yaml:"lease_ttl"`
 	}{
-		Endpoints: []string{"localhost:2379"},
-		LeaseTTL:  10,
+		Services: []string{"etcd"},
+		LeaseTTL: 10,
 	},
 }
 
@@ -54,8 +60,8 @@ func LoadConfig() (*Config, error) {
 	config := defaultConfig
 
 	// 从环境变量读取配置
-	if endpoints := os.Getenv("ETCD_ENDPOINTS"); endpoints != "" {
-		config.Etcd.Endpoints = strings.Split(endpoints, ",")
+	if services := os.Getenv("ETCD_SERVICES"); services != "" {
+		config.Etcd.Services = strings.Split(services, ",")
 	}
 
 	if ttl := os.Getenv("ETCD_LEASE_TTL"); ttl != "" {
@@ -188,84 +194,116 @@ func GetLockOwner(cli *clientv3.Client, key string) (string, error) {
 }
 
 // HTTP处理函数
-// TODO: how to use the etcd client of each service
-func setupRoutes(r *gin.Engine, cli *clientv3.Client, config *Config) {
+// if one client fails, will try the next one, if all fail, return error
+func setupRoutes(r *gin.Engine, clis []*clientv3.Client, config *Config) {
 	r.POST("/lock/:key", func(c *gin.Context) {
 		key := c.Param("key")
 		value := c.PostForm("value")
 
-		if err := Lock(cli, key, value, config.Etcd.LeaseTTL); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+		var count int = 0
+		for _, cli := range clis {
+			if err := Lock(cli, key, value, config.Etcd.LeaseTTL); err != nil {
+				count++
+				continue
+			} else {
+				c.JSON(http.StatusOK, gin.H{"message": "锁定成功"})
+				return
+			}
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "锁定成功"})
+		if count == len(clis) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "锁定失败"})
+		}
 	})
 
 	r.POST("/keepalive/:key", func(c *gin.Context) {
 		key := c.Param("key")
 		value := c.PostForm("value")
 
-		if err := KeepAlive(cli, key, value); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+		var count int = 0
+		for _, cli := range clis {
+			if err := KeepAlive(cli, key, value); err != nil {
+				count++
+				continue
+			} else {
+				c.JSON(http.StatusOK, gin.H{"message": "续约成功"})
+				return
+			}
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "续约成功"})
+		if count == len(clis) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "续约失败"})
+		}
 	})
 
 	r.POST("/unlock/:key", func(c *gin.Context) {
 		key := c.Param("key")
 
-		if err := Unlock(cli, key); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+		var count int = 0
+		for _, cli := range clis {
+			if err := Unlock(cli, key); err != nil {
+				count++
+				continue
+			} else {
+				c.JSON(http.StatusOK, gin.H{"message": "解锁成功"})
+				return
+			}
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "解锁成功"})
+		if count == len(clis) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "解锁失败"})
+		}
 	})
 
 	// 添加查询锁持有者的路由
 	r.GET("/lock/:key", func(c *gin.Context) {
 		key := c.Param("key")
 
-		owner, err := GetLockOwner(cli, key)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": err.Error(),
-			})
-			return
+		var count int = 0
+		for _, cli := range clis {
+			if owner, err := GetLockOwner(cli, key); err != nil {
+				count++
+				continue
+			} else {
+				c.JSON(http.StatusOK, gin.H{
+					"key":   key,
+					"owner": owner,
+				})
+				return
+			}
 		}
 
-		// 返回锁的持有者信息
-		c.JSON(http.StatusOK, gin.H{
-			"key":   key,
-			"owner": owner,
-		})
+		if count == len(clis) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "查询锁持有者失败"})
+		}
 	})
 
 	// 添加查询所有锁的路由（可选）
 	r.GET("/locks", func(c *gin.Context) {
-		// 使用前缀查询获取所有锁
-		resp, err := cli.Get(context.Background(), "", clientv3.WithPrefix())
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": fmt.Sprintf("查询失败: %v", err),
-			})
-			return
+		var count int = 0
+		for _, cli := range clis {
+			if resp, err := cli.Get(context.Background(), "", clientv3.WithPrefix()); err != nil {
+				count++
+				continue
+			} else {
+				locks := make([]map[string]string, 0)
+				for _, kv := range resp.Kvs {
+					locks = append(locks, map[string]string{
+						"key":   string(kv.Key),
+						"owner": string(kv.Value),
+					})
+				}
+
+				c.JSON(http.StatusOK, gin.H{
+					"locks": locks,
+				})
+				return
+			}
 		}
 
-		locks := make([]map[string]string, 0)
-		for _, kv := range resp.Kvs {
-			locks = append(locks, map[string]string{
-				"key":   string(kv.Key),
-				"owner": string(kv.Value),
-			})
+		if count == len(clis) {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询所有锁失败"})
 		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"locks": locks,
-		})
 	})
 }
 
@@ -354,22 +392,28 @@ func main() {
 	}
 
 	// 打印当前配置
-	log.Printf("当前配置 - Endpoints: %v, LeaseTTL: %d",
-		config.Etcd.Endpoints, config.Etcd.LeaseTTL)
+	log.Printf("当前配置 - Services: %v, LeaseTTL: %d",
+		config.Etcd.Services, config.Etcd.LeaseTTL)
 
-	// 创建etcd客户端
-	// TODO: use NewClient function to create etcd client for each service
-	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   config.Etcd.Endpoints,
-		DialTimeout: 5 * time.Second,
-	})
-	if err != nil {
-		log.Fatal(err)
+	// 创建etcd客户端，每个service一个client
+	var clis []*clientv3.Client
+	for _, service := range config.Etcd.Services {
+		if cli, err := NewClient(context.Background(), etcd_server_port,
+			etcdclient_dial_timeout, service, etcd_namespace); err != nil {
+			log.Fatal(err)
+			defer cli.Close()
+			continue
+		} else {
+			clis = append(clis, cli.Client)
+		}
+
 	}
-	defer cli.Close()
+	if len(clis) == 0 {
+		log.Fatal("没有可用的etcd客户端")
+	}
 
 	// 创建gin路由
 	r := gin.Default()
-	setupRoutes(r, cli, config)
+	setupRoutes(r, clis, config)
 	r.Run(":8080")
 }
