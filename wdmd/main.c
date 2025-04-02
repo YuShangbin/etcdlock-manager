@@ -7,6 +7,8 @@
  * of the GNU General Public License v2 or (at your option) any later version.
  */
 
+ #define _GNU_SOURCE
+
 #include <inttypes.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -36,6 +38,12 @@
 #include <sys/time.h>
 #include <sys/signalfd.h>
 #include <linux/watchdog.h>
+#include <linux/limits.h>
+#include <linux/time.h>
+#include <asm-generic/socket.h>
+#include <asm-generic/fcntl.h>
+#include <asm-generic/signal-defs.h>
+#include <linux/sched.h>
 
 #include "wdmd.h"
 #include "wdmd_sock.h"
@@ -43,6 +51,7 @@
 #ifndef GNUC_UNUSED
 #define GNUC_UNUSED __attribute__((__unused__))
 #endif
+
 
 #define DEFAULT_TEST_INTERVAL 10
 #define RECOVER_TEST_INTERVAL 1
@@ -2151,6 +2160,8 @@ static void print_usage_and_exit(int status)
 	printf("-w <path>              path to the watchdog device to try first\n");
 	exit(status);
 }
+
+#define VERSION "1.0.1"
 
 static void print_version_and_exit(void)
 {

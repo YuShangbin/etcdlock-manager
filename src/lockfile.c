@@ -7,6 +7,10 @@
  * of the GNU General Public License v2 or (at your option) any later version.
  */
 
+
+#include <sys/file.h>
+#include <sys/sysmacros.h>
+#include <asm-generic/fcntl.h>
 #include <inttypes.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -16,7 +20,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
-#include <limits.h>
+#include <linux/limits.h>
 #include <time.h>
 #include <syslog.h>
 #include <sys/types.h>
@@ -25,9 +29,9 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#include "sanlock_internal.h"
 #include "log.h"
 #include "lockfile.h"
+
 
 int lockfile(const char *dir, const char *name, int uid, int gid)
 {

@@ -1,7 +1,55 @@
 /* Copyright 2025 EasyStack, Inc. */
 
+#define _POSIX_C_SOURCE 200809L
+
+#include <signal.h>
+#include <inttypes.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <fcntl.h>
+#include <string.h>
+#include <errno.h>
+#include <limits.h>
+#include <time.h>
+#include <syslog.h>
+#include <pthread.h>
+#include <poll.h>
+#include <sched.h>
+#include <pwd.h>
+#include <grp.h>
+#include <ctype.h>
+#include <sys/types.h>
+#include <sys/prctl.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/un.h>
+#include <sys/mman.h>
+#include <sys/utsname.h>
+#include <sys/resource.h>
+#include <sys/eventfd.h>
+#include <asm-generic/fcntl.h>
+#include <asm-generic/siginfo.h>
+#include <asm-generic/signal-defs.h>
+#include <linux/sched.h>
+#include <asm-generic/socket.h>
+
+#define EXTERN
+
+#include "cmd.h"
+#include "env.h"
 #include "etcdlock_manager_internal.h"
+#include "etcdlock_manager_sock.h"
 #include "libvirt_sanlock_helper.h"
+#include "list.h"
+#include "log.h"
+#include "monotime.h"
+#include "timeouts.h"
+
 
 #define SIGRUNPATH 100 /* anything that's not SIGTERM/SIGKILL */
 #define CLIENT_NALLOC 1024
@@ -27,6 +75,8 @@ static char command[COMMAND_MAX];
 static int cmd_argc;
 static char **cmd_argv;
 static struct thread_pool pool;
+
+int log_stderr_priority = -1;
 
 static int user_to_uid(char *arg)
 {
@@ -1040,7 +1090,7 @@ static void setup_priority(void)
  * processing and handle the cleanup of the client if so.
  */
 
- static void process_cmd_thread_registered(int ci_in, struct sm_header *h_recv)
+ static void process_cmd_thread_registered(int ci_in, struct em_header *h_recv)
  {
 	 struct cmd_args *ca;
 	 struct client *cl;
@@ -1057,10 +1107,7 @@ static void setup_priority(void)
 	 if (h_recv->data2 != -1) {
 		 /* lease for another registered client with pid or client_id specified by data2 */
  
-		 if (h_recv->cmd_flags & SANLK_FOR_CLIENT_ID)
-			 for_client_id = h_recv->data2;
-		 else
-			 for_pid = h_recv->data2;
+		 for_pid = h_recv->data2;
  
 		 for (i = 0; i < client_size; i++) {
 			 cl = &client[i];
@@ -1122,7 +1169,7 @@ static void setup_priority(void)
 		 goto out;
 	 }
  
-	 if (cl->kill_count && h_recv->cmd == SM_CMD_ACQUIRE) {
+	 if (cl->kill_count && h_recv->cmd == EM_CMD_ACQUIRE) {
 		 /* when pid is being killed, we want killpath to be able
 			to inquire and release for it */
 		 log_error("cmd %d %d,%d,%d kill_count %d",
@@ -1132,7 +1179,7 @@ static void setup_priority(void)
 	 }
  
 	 if (cl->cmd_active) {
-		 if (com.quiet_fail && cl->cmd_active == SM_CMD_ACQUIRE) {
+		 if (com.quiet_fail && cl->cmd_active == EM_CMD_ACQUIRE) {
 			 result = -EBUSY;
 			 goto out;
 		 }
@@ -1159,7 +1206,7 @@ static void setup_priority(void)
 	 ca->ci_target = ci_target;
 	 ca->cl_pid = cl->pid;
 	 ca->cl_fd = cl->fd;
-	 memcpy(&ca->header, h_recv, sizeof(struct sm_header));
+	 memcpy(&ca->header, h_recv, sizeof(struct em_header));
  
 	 rv = thread_pool_add_work(ca);
 	 if (rv < 0) {
@@ -1188,7 +1235,7 @@ static void setup_priority(void)
 
 static void process_connection(int ci)
 {
-	struct sm_header h;
+	struct em_header h;
 	void (*deadfn)(int ci);
 	int rv;
 
@@ -1213,13 +1260,13 @@ static void process_connection(int ci)
 			  ci, client[ci].fd, client[ci].pid, rv, h.cmd, h.length);
 		goto bad;
 	}
-	if (h.magic != SM_MAGIC) {
+	if (h.magic != EM_MAGIC) {
 		log_error("client connection %d %d %d recv msg header rv %d cmd %u len %u magic %x vs %x",
-			  ci, client[ci].fd, client[ci].pid, rv, h.cmd, h.length, h.magic, SM_MAGIC);
+			  ci, client[ci].fd, client[ci].pid, rv, h.cmd, h.length, h.magic, EM_MAGIC);
 		goto bad;
 	}
-	if (h.version && (h.cmd != SM_CMD_VERSION) &&
-	    (h.version & 0xFFFF0000) > (SM_PROTO & 0xFFFF0000)) {
+	if (h.version && (h.cmd != EM_CMD_VERSION) &&
+	    (h.version & 0xFFFF0000) > (EM_PROTO & 0xFFFF0000)) {
 		log_error("client connection %d %d %d recv msg header rv %d cmd %u len %u version %x",
 			  ci, client[ci].fd, client[ci].pid, rv, h.cmd, h.length, h.version);
 		goto bad;
@@ -1228,11 +1275,11 @@ static void process_connection(int ci)
 	client[ci].cmd_last = h.cmd;
 
 	switch (h.cmd) {
-	case SM_CMD_VERSION:
+	case EM_CMD_VERSION:
 		call_cmd_daemon(ci, &h, client_maxi);
 		break;
-	case SM_CMD_ACQUIRE:
-	case SM_CMD_RELEASE:
+	case EM_CMD_ACQUIRE:
+	case EM_CMD_RELEASE:
 		/* the main_loop needs to ignore this connection
 		   while the thread is working on it */
 		rv = client_suspend(ci);
@@ -1743,9 +1790,9 @@ static int do_client(void)
 
 	switch (com.action) {
 	case ACT_ACQUIRE:
-		if (com.pid > -1) {
-			log_tool("acquire pid %d", com.pid);
-			id = com.pid;
+		if (com.vm_pid > -1) {
+			log_tool("acquire pid %d", com.vm_pid);
+			id = com.vm_pid;
 		} else if (com.cid > -1) {
 			log_tool("acquire client_id %d", com.cid);
 			id = com.cid;
@@ -1755,9 +1802,9 @@ static int do_client(void)
 		break;
 
 	case ACT_RELEASE:
-		if (com.pid > -1) {
-			log_tool("release pid %d", com.pid);
-			id = com.pid;
+		if (com.vm_pid > -1) {
+			log_tool("release pid %d", com.vm_pid);
+			id = com.vm_pid;
 		} else if (com.cid > -1) {
 			log_tool("release client_id %d", com.cid);
 			id = com.cid;
@@ -1796,7 +1843,7 @@ int main(int argc, char *argv[])
 	com.names_log_priority = LOG_INFO;
 	com.max_worker_threads = DEFAULT_MAX_WORKER_THREADS;
 	com.base_timeout = DEFAULT_BASE_TIMEOUT;
-	com.pid = -1;
+	com.vm_pid = -1;
 	com.cid = -1;
 	com.quiet_fail = DEFAULT_QUIET_FAIL;
 	com.keepalive_history_size = DEFAULT_KEEPALIVE_HISTORY_SIZE;

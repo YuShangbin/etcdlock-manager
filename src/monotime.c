@@ -3,7 +3,10 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <time.h>
+#include <linux/time.h>
+
 #include "monotime.h"
+
 
 uint64_t monotime(void)
 {

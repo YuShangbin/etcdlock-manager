@@ -1,5 +1,39 @@
 /* Copyright 2025 EasyStack, Inc. */
 
+#include <inttypes.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <fcntl.h>
+#include <string.h>
+#include <errno.h>
+#include <limits.h>
+#include <time.h>
+#include <syslog.h>
+#include <pthread.h>
+#include <poll.h>
+#include <sched.h>
+#include <pwd.h>
+#include <grp.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/un.h>
+#include <sys/mman.h>
+#include <sys/mman.h>
+#include <sys/utsname.h>
+
+#include "etcdlock_manager_internal.h"
+#include "etcdlock_manager_sock.h"
+#include "cmd.h"
+
+static int shutdown_reply_fd = -1;
+static int shutdown_reply_ci = -1;
+
 static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 {
 	struct client *cl;
@@ -95,7 +129,7 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	/* 2. Success acquiring lock, and pid is dead */
 
 	if (!result && pid_dead) {
-		release_lock(elk->key);
+		release_lock(elk.key);
 		client_free(cl_ci);
 		result = -ENOTTY;
 		goto reply;
@@ -104,14 +138,14 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	/* 3. Failure acquiring leases, and pid is live */
 
 	if (result && !pid_dead) {
-		release_lock(elk->key);
+		release_lock(elk.key);
 		goto reply;
 	}
 
 	/* 4. Failure acquiring leases, and pid is dead */
 
 	if (result && pid_dead) {
-		release_lock(elk->key);
+		release_lock(elk.key);
 		client_free(cl_ci);
 		goto reply;
 	}
@@ -126,6 +160,7 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 static void cmd_release(struct cmd_args *ca, uint32_t cmd)
 {
 	struct client *cl;
+	struct etcdlock elk;
 	int fd, rv, pid_dead;
 	int result = 0;
 	int cl_ci = ca->ci_target;
@@ -146,7 +181,7 @@ static void cmd_release(struct cmd_args *ca, uint32_t cmd)
 		goto out;
 	}
 
-	result = release_lock(elk->key);
+	result = release_lock(elk.key);
 
 out:	
 	pthread_mutex_lock(&cl->mutex);
@@ -172,7 +207,7 @@ out:
 
 	/* delete elk from etcdlocks list */
 	pthread_mutex_lock(&etcdlocks_mutex);
-    list_del(&elk->list);
+    list_del(&elk.list);
 	pthread_mutex_unlock(&etcdlocks_mutex);
 
 	send_result(ca->ci_in, fd, &ca->header, result);
@@ -184,23 +219,23 @@ void call_cmd_thread(struct cmd_args *ca)
 	uint32_t cmd = ca->header.cmd;
 
 	switch (cmd) {
-	case SM_CMD_ACQUIRE:
+	case EM_CMD_ACQUIRE:
 		cmd_acquire(ca, cmd);
 		break;
-	case SM_CMD_RELEASE:
+	case EM_CMD_RELEASE:
 		cmd_release(ca, cmd);
 		break;
 	};
 }
 
-void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
+void call_cmd_daemon(int ci, struct em_header *h_recv, int client_maxi)
 {
 	int rv, pid, auto_close = 1;
 	int fd = client[ci].fd;
 	uint32_t cmd = h_recv->cmd;
 
 	switch (cmd) {
-	case SM_CMD_VERSION:
+	case EM_CMD_VERSION:
 		cmd_version(ci, fd, h_recv);
 		auto_close = 0;
 		break;
@@ -229,15 +264,15 @@ void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
 
 void daemon_shutdown_reply(void)
 {
-	struct sm_header h;
+	struct em_header h;
 
 	/* shutdown wait was not used */
 	if (shutdown_reply_fd == -1)
 		return;
 
 	memset(&h, 0, sizeof(h));
-	h.magic = SM_MAGIC;
-	h.version = SM_PROTO;
+	h.magic = EM_MAGIC;
+	h.version = EM_PROTO;
 	h.length = sizeof(h);
 
 	send_all(shutdown_reply_fd, &h, sizeof(h), MSG_NOSIGNAL);

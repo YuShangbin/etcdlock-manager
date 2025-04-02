@@ -17,8 +17,11 @@
 
 #include <curl/curl.h>
 
+#include "etcdlock_manager_internal.h"
+#include "etcdlock_manager_rv.h"
 #include "libvirt_sanlock_helper.h"
 #include "monotime.h"
+#include "list.h"
 
 
 #define BASE_URL "http://localhost:8080"
@@ -259,7 +262,7 @@ void *lock_thread(void *arg_in)
         elk->lease_status.keepalive_last_result = etcdlock_result;
         elk->lease_status.keepalive_last_attempt = etcdlock_begin;
  
-        if (etcdlock_result == ETCDLOCK_OK) {
+        if (etcdlock_result == ETCDLOCK_OK)
             elk->lease_status.keepalive_last_success = last_success;
  
         /*
@@ -380,7 +383,7 @@ set_status:
     if (etcdlock_result == ETCDLOCK_OK)
         elk->lease_status.keepalive_last_success = last_success;
     /* First keepalive entry shows the acquire time with 0 latencies. */
-    save_keepalive_history(elk, etcdlock_result, last_success, 0, 0);
+    save_keepalive_history(elk, etcdlock_result, last_success);
     pthread_mutex_unlock(&elk->mutex);
 
     /* If acquire lock successful, start the keepalive thread */

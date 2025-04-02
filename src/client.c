@@ -1,18 +1,73 @@
 /* Copyright 2025 EasyStack, Inc. */
 
+#include <inttypes.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <fcntl.h>
+#include <string.h>
+#include <errno.h>
+#include <limits.h>
+#include <time.h>
+#include <syslog.h>
+#include <pthread.h>
+#include <poll.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/un.h>
 
+#include "etcdlock_manager_internal.h"
+#include "etcdlock_manager_sock.h"
 
-static int send_header(int sock, int cmd, int datalen,
-		               uint32_t data2)
+#ifndef GNUC_UNUSED
+#define GNUC_UNUSED __attribute__((__unused__))
+#endif
+
+static int connect_socket(int *sock_fd)
 {
-	struct sm_header header;
+	int rv, s;
+	struct sockaddr_un addr;
+	static const char *run_dir;
+
+	*sock_fd = -1;
+	s = socket(AF_LOCAL, SOCK_STREAM, 0);
+	if (s < 0)
+		return -errno;
+
+	if (run_dir == NULL)
+		run_dir = env_get("ETCDLOCK_MGR_RUN_DIR", DEFAULT_RUN_DIR);
+
+	rv = etcdlock_manager_socket_address(run_dir, &addr);
+	if (rv < 0) {
+		close(s);
+		return rv;
+	}
+
+	rv = connect(s, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
+	if (rv < 0) {
+		rv = -errno;
+		close(s);
+		return rv;
+	}
+	*sock_fd = s;
+	return 0;
+}
+static int send_header(int sock, int cmd, int datalen, 
+	uint32_t data2)
+{
+	struct em_header header;
 	size_t rem = sizeof(header);
 	size_t off = 0;
 	ssize_t rv;
 
 	memset(&header, 0, sizeof(header));
-	header.magic = SM_MAGIC;
-	header.version = SM_PROTO;
+	header.magic = EM_MAGIC;
+	header.version = EM_PROTO;
 	header.cmd = cmd;
 	header.length = sizeof(header) + datalen;
 	header.data2 = data2;
@@ -52,7 +107,7 @@ retry:
 
 static int recv_result(int fd)
 {
-	struct sm_header h;
+	struct em_header h;
 	ssize_t rv;
 
 	memset(&h, 0, sizeof(h));
@@ -84,7 +139,7 @@ int etcdlock_acquire(int sock, char *volume, int vm_pid, char *vm_uri, char *vm_
         /* connect to daemon and ask it to acquire a lease for
            another registered pid */
 
-        data2 = pid;
+        data2 = vm_pid;
 
         rv = connect_socket(&fd);
         if (rv < 0)
@@ -97,7 +152,7 @@ int etcdlock_acquire(int sock, char *volume, int vm_pid, char *vm_uri, char *vm_
         fd = sock;
     }
 
-    rv = send_header(fd, SM_CMD_ACQUIRE, datalen, data2);
+    rv = send_header(fd, EM_CMD_ACQUIRE, datalen, data2);
     if (rv < 0)
         return rv;
 
@@ -115,7 +170,7 @@ out:
 }
 
 /* tell daemon to release lease(s) for given pid.
-   I don't think the pid itself will usually tell sm to release leases,
+   I don't think the pid itself will usually tell em to release leases,
    but it will be requested by a manager overseeing the pid */
 
 int etcdlock_release(int sock, int pid, char *volume)
@@ -143,7 +198,7 @@ int etcdlock_release(int sock, int pid, char *volume)
 	datalen = sizeof(struct etcdlock);
     elk->key = volume;
 
-	rv = send_header(fd, SM_CMD_RELEASE, datalen, data2);
+	rv = send_header(fd, EM_CMD_RELEASE, datalen, data2);
 	if (rv < 0)
 		goto out;
 

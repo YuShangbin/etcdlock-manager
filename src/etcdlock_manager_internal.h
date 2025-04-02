@@ -3,7 +3,21 @@
 #ifndef __ETCDLOCK_MANAGER_INTERNAL_H__
 #define __ETCDLOCK_MANAGER_INTERNAL_H__
 
+#include "libvirt_sanlock_helper.h"
+#include "list.h"
+
+#ifndef GNUC_UNUSED
+#define GNUC_UNUSED __attribute__((__unused__))
+#endif
+
 #define BUILD_BUG_ON(condition) ((void)sizeof(char[1 - 2*!!(condition)]))
+
+#ifndef EXTERN
+#define EXTERN extern
+#else
+#undef EXTERN
+#define EXTERN
+#endif
 
 #define DEFAULT_KILL_COUNT_MAX 100
 #define DEFAULT_USE_WATCHDOG 1
@@ -26,50 +40,17 @@
 #define COM_DAEMON      1
 #define COM_CLIENT      2
 
-enum {
-	ACT_STATUS = 1,
-	ACT_HOST_STATUS,
-	ACT_LOG_DUMP,
-	ACT_SHUTDOWN,
-	ACT_ADD_LOCKSPACE,
-	ACT_INQ_LOCKSPACE,
-	ACT_REM_LOCKSPACE,
-	ACT_COMMAND, 
-	ACT_ACQUIRE, 
+enum { 
+	ACT_ACQUIRE = 1, 
 	ACT_RELEASE,
-	ACT_INQUIRE, 
-	ACT_CONVERT, 
-	ACT_REQUEST,
-	ACT_ACQUIRE_ID,
-	ACT_RELEASE_ID,
-	ACT_RENEW_ID,
-	ACT_DIRECT_INIT,
-	ACT_DUMP,
-	ACT_NEXT_FREE,
-	ACT_READ_LEADER,
-	ACT_CLIENT_INIT,
-	ACT_CLIENT_READ,
-	ACT_CLIENT_ALIGN,
-	ACT_EXAMINE,
-	ACT_GETS,
 	ACT_VERSION,
-	ACT_SET_EVENT,
-	ACT_SET_CONFIG,
-	ACT_WRITE_LEADER,
-	ACT_RENEWAL,
-	ACT_FORMAT,
-	ACT_CREATE,
-	ACT_DELETE,
-	ACT_LOOKUP,
-	ACT_UPDATE,
-	ACT_REBUILD,
 };
 
 struct command_line {
 	int type;				/* COM_ */
 	int action;				/* ACT_ */
 	int debug;
-	int debug_renew;
+	int debug_keepalive;
 	int debug_hosts;
 	int debug_clients;
 	int debug_io_submit;
@@ -83,7 +64,7 @@ struct command_line {
 	int wait;
 	int use_watchdog;
 	int watchdog_fire_timeout;
-	int io_timeout;			/* DEFAULT_IO_TIMEOUT or sanlock.conf io_timeout */
+	int base_timeout;
 	int kill_grace_seconds;		/* -g */
 	int kill_grace_set;
 	int high_priority;		/* -h */
@@ -136,9 +117,36 @@ EXTERN int helper_status_fd;
 EXTERN uint32_t helper_full_count;
 EXTERN int external_shutdown;
 
-/* TODO: define etcdlock structure */
-struct etcdlock {
 
+struct lease_status {
+	int corrupt_result;
+	int acquire_last_result;
+	int keepalive_last_result;
+	uint64_t acquire_last_attempt;
+	uint64_t acquire_last_success;
+	uint64_t keepalive_last_attempt;
+	uint64_t keepalive_last_success;
+};
+
+struct etcdlock {
+	struct list_head list;
+	char *key;
+	int value;
+	char *vm_uri;
+	char *vm_uuid;
+	uint32_t base_timeout;
+	struct keepalive_history *keepalive_history;
+	int keepalive_history_size;
+	int keepalive_history_next;
+	int keepalive_history_prev;
+	pthread_mutex_t mutex;
+	int thread_stop;
+	struct lease_status lease_status;
+	pthread_t thread;
+	struct client *client;
+	int killing_pid;
+	int keepalive_fail;
+	int wd_fd;
 };
 
 struct keepalive_history {
@@ -210,5 +218,9 @@ struct worker_info {
 EXTERN int daemon_status_num_workers; /* replicate thread pool counter for status reporting */
 
 #define DEFAULT_SOCKET_MODE (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP)
+
+EXTERN int efd;
+EXTERN int is_helper;
+EXTERN uint64_t helper_last_status;
 
 #endif

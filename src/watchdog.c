@@ -25,7 +25,7 @@
 #include <sys/time.h>
 #include <sys/stat.h>
 
-#include "sanlock_internal.h"
+#include "etcdlock_manager_internal.h"
 #include "log.h"
 #include "watchdog.h"
 

@@ -1,5 +1,11 @@
 /* Copyright 2025 EasyStack, Inc. */
 
+#include <stdint.h>                    
+
+#include "etcdlock_manager_internal.h" 
+#include "log.h"                       
+
+
 void setup_timeouts(void)
 {
 	/*

@@ -1,5 +1,21 @@
 /* Copyright 2025 EasyStack, Inc. */
 
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <syslog.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <linux/limits.h>
+
+#include "etcdlock_manager_internal.h"
+#include "log.h"
+
+
+#define LOG_STR_LEN 512
+
 static pthread_t thread_handle;
 
 struct entry {
@@ -13,8 +29,17 @@ static char logfile_path[PATH_MAX];
 static FILE *logfile_fp;
 static struct entry *log_ents;
 static unsigned int log_num_ents = LOG_DEFAULT_ENTRIES;
+static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t log_cond = PTHREAD_COND_INITIALIZER;
 
-/* TODO */
+static unsigned int log_head_ent; /* add at head */
+static unsigned int log_tail_ent; /* remove from tail */
+static unsigned int log_thread_done;
+static unsigned int log_pending_ents;
+static unsigned int log_dropped;
+
+extern int log_stderr_priority;
+
 static void *log_thread_fn(void *arg GNUC_UNUSED)
 {
 	char str[LOG_STR_LEN];
@@ -83,7 +108,6 @@ int setup_logging(void)
 	return 0;
 }
 
-/* TODO  */
 void close_logging(void)
 {
 	pthread_mutex_lock(&log_mutex);
