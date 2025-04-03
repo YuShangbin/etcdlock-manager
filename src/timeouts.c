@@ -3,7 +3,8 @@
 #include <stdint.h>                    
 
 #include "etcdlock_manager_internal.h" 
-#include "log.h"                       
+#include "log.h"
+#include "timeouts.h"                    
 
 
 void setup_timeouts(void)

@@ -7,10 +7,10 @@
  * of the GNU General Public License v2 or (at your option) any later version.
  */
 
+ #define _POSIX_C_SOURCE 200809L
 
 #include <sys/file.h>
 #include <sys/sysmacros.h>
-#include <asm-generic/fcntl.h>
 #include <inttypes.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -54,7 +54,9 @@ int lockfile(const char *dir, const char *name, int uid, int gid)
 
 	rv = chown(dir, uid, gid);
 	if (rv < 0) {
-		log_error("lockfile chown error %s: %s",
+		/*log_error("lockfile chown error %s: %s",
+			  dir, strerror(errno));*/
+		fprintf(stderr, "lockfile chown error %s: %s\n",
 			  dir, strerror(errno));
 		return rv;
 	}
@@ -63,7 +65,9 @@ int lockfile(const char *dir, const char *name, int uid, int gid)
 
 	fd = open(path, O_CREAT|O_WRONLY|O_CLOEXEC, 0644);
 	if (fd < 0) {
-		log_error("lockfile open error %s: %s",
+		/*log_error("lockfile open error %s: %s",
+			  path, strerror(errno));*/
+		fprintf(stderr, "lockfile open error %s: %s\n",
 			  path, strerror(errno));
 		return -1;
 	}
@@ -75,14 +79,18 @@ int lockfile(const char *dir, const char *name, int uid, int gid)
 
 	rv = fcntl(fd, F_SETLK, &lock);
 	if (rv < 0) {
-		log_error("lockfile setlk error %s: %s",
+		/*log_error("lockfile setlk error %s: %s",
+			  path, strerror(errno));*/
+		fprintf(stderr, "lockfile setlk error %s: %s\n",
 			  path, strerror(errno));
 		goto fail;
 	}
 
 	rv = ftruncate(fd, 0);
 	if (rv < 0) {
-		log_error("lockfile truncate error %s: %s",
+		/*log_error("lockfile truncate error %s: %s",
+			  path, strerror(errno));*/
+		fprintf(stderr, "lockfile truncate error %s: %s\n",
 			  path, strerror(errno));
 		goto fail;
 	}
@@ -92,7 +100,9 @@ int lockfile(const char *dir, const char *name, int uid, int gid)
 
 	rv = write(fd, buf, strlen(buf));
 	if (rv <= 0) {
-		log_error("lockfile write error %s: %s",
+		/*log_error("lockfile write error %s: %s",
+			  path, strerror(errno));*/
+		fprintf(stderr, "lockfile write error %s: %s\n",
 			  path, strerror(errno));
 		goto fail;
 	}

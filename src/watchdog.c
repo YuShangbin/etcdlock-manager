@@ -50,7 +50,8 @@ int open_watchdog(int con, int fire_timeout)
 
 	rv = wdmd_open_watchdog(con, fire_timeout);
 	if (rv < 0) {
-		log_error("wdmd_open_watchdog fire_timeout %d error", fire_timeout);
+		/*log_error("wdmd_open_watchdog fire_timeout %d error", fire_timeout);*/
+		fprintf(stderr, "wdmd_open_watchdog fire_timeout %d error\n", fire_timeout);
 		return -1;
 	}
 
@@ -68,7 +69,9 @@ void update_watchdog(struct etcdlock *elk, uint64_t timestamp,
 
 	rv = wdmd_test_live(elk->wd_fd, timestamp, timestamp + keepalive_fail_timeout_seconds);
 	if (rv < 0)
-		log_erros(elk, "wdmd_test_live %llu failed %d",
+		/*log_erros(elk, "wdmd_test_live %llu failed %d",
+			  (unsigned long long)timestamp, rv);*/
+		fprintf(stderr, "wdmd_test_live %llu failed %d\n",
 			  (unsigned long long)timestamp, rv);
 }
 
@@ -82,7 +85,8 @@ int connect_watchdog(struct etcdlock *elk)
 
 	con = wdmd_connect();
 	if (con < 0) {
-		log_erros(elk, "wdmd_connect failed %d", con);
+		/*log_erros(elk, "wdmd_connect failed %d", con);*/
+		fprintf(stderr, "wdmd_connect failed %d\n", con);
 		return -1;
 	}
 
@@ -108,7 +112,8 @@ int activate_watchdog(struct etcdlock *elk, uint64_t timestamp,
 
 	rv = wdmd_register(con, name);
 	if (rv < 0) {
-		log_erros(elk, "wdmd_register failed %d", rv);
+		/*log_erros(elk, "wdmd_register failed %d", rv);*/
+		fprintf(stderr, "wdmd_register failed %d\n", rv);
 		goto fail_close;
 	}
 
@@ -116,25 +121,30 @@ int activate_watchdog(struct etcdlock *elk, uint64_t timestamp,
 
 	rv = wdmd_refcount_set(con);
 	if (rv < 0) {
-		log_erros(elk, "wdmd_refcount_set failed %d", rv);
+		/*log_erros(elk, "wdmd_refcount_set failed %d", rv);*/
+		fprintf(stderr, "wdmd_refcount_set failed %d\n", rv);
 		goto fail_close;
 	}
 
 	rv = wdmd_status(con, &test_interval, &fire_timeout, &last_keepalive);
 	if (rv < 0) {
-		log_erros(elk, "wdmd_status failed %d", rv);
+		/*log_erros(elk, "wdmd_status failed %d", rv);*/
+		fprintf(stderr, "wdmd_status failed %d\n", rv);
 		goto fail_clear;
 	}
 
 	if (fire_timeout != com.watchdog_fire_timeout) {
-		log_erros(elk, "wdmd invalid fire_timeout %d vs %d",
+		/*log_erros(elk, "wdmd invalid fire_timeout %d vs %d",
+			  fire_timeout, com.watchdog_fire_timeout);*/
+		fprintf(stderr, "wdmd invalid fire_timeout %d vs %d\n",
 			  fire_timeout, com.watchdog_fire_timeout);
 		goto fail_clear;
 	}
 
 	rv = wdmd_test_live(con, timestamp, timestamp + keepalive_fail_timeout_seconds);
 	if (rv < 0) {
-		log_erros(elk, "wdmd_test_live in create failed %d", rv);
+		/*log_erros(elk, "wdmd_test_live in create failed %d", rv);*/
+		fprintf(stderr, "wdmd_test_live in create failed %d\n", rv);
 		goto fail_clear;
 	}
 
@@ -155,11 +165,13 @@ void deactivate_watchdog(struct etcdlock *elk)
 	if (!com.use_watchdog)
 		return;
 
-	log_etcdlock(elk, "wdmd_test_live 0 0 to disable");
+	/*log_etcdlock(elk, "wdmd_test_live 0 0 to disable");*/
+	fprintf(stderr, "wdmd_test_live 0 0 to disable\n");
 
 	rv = wdmd_test_live(elk->wd_fd, 0, 0);
 	if (rv < 0) {
-		log_erros(elk, "wdmd_test_live in deactivate failed %d", rv);
+		/*log_erros(elk, "wdmd_test_live in deactivate failed %d", rv);*/
+		fprintf(stderr, "wdmd_test_live in deactivate failed %d\n", rv);
 
 		/* We really want this to succeed to avoid a reset, so retry
 	   	   after a short delay in case the problem was transient... */
@@ -168,7 +180,8 @@ void deactivate_watchdog(struct etcdlock *elk)
 
 		rv = wdmd_test_live(elk->wd_fd, 0, 0);
 		if (rv < 0)
-			log_erros(elk, "wdmd_test_live in deactivate 2 failed %d", rv);
+			/*log_erros(elk, "wdmd_test_live in deactivate 2 failed %d", rv);*/
+			fprintf(stderr, "wdmd_test_live in deactivate 2 failed %d\n", rv);
 	}
 
 	wdmd_refcount_clear(elk->wd_fd);

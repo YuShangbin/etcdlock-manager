@@ -1,9 +1,10 @@
 /* Copyright 2025 EasyStack, Inc. */
 
+#define _POSIX_C_SOURCE 200112L
+
 #include <unistd.h>
 #include <stdint.h>
 #include <time.h>
-#include <linux/time.h>
 
 #include "monotime.h"
 

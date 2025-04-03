@@ -3,7 +3,9 @@
 #ifndef __ETCDLOCK_MANAGER_INTERNAL_H__
 #define __ETCDLOCK_MANAGER_INTERNAL_H__
 
-#include "libvirt_sanlock_helper.h"
+#include <pthread.h>
+
+#include "libvirt_helper.h"
 #include "list.h"
 
 #ifndef GNUC_UNUSED
@@ -131,7 +133,7 @@ struct lease_status {
 struct etcdlock {
 	struct list_head list;
 	char *key;
-	int value;
+	char *value;
 	char *vm_uri;
 	char *vm_uuid;
 	uint32_t base_timeout;

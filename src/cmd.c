@@ -30,9 +30,27 @@
 #include "etcdlock_manager_internal.h"
 #include "etcdlock_manager_sock.h"
 #include "cmd.h"
+#include "etcdlock.h"
+
+void client_resume(int ci);
+void client_free(int ci);
+void client_pid_dead(int ci);
+void send_result(int ci, int fd, struct em_header *h_recv, int result);
 
 static int shutdown_reply_fd = -1;
 static int shutdown_reply_ci = -1;
+
+static ssize_t recv_loop(int sockfd, void *buf, size_t len, int flags)
+{
+	ssize_t rv;
+
+	for (;;) {
+		rv = recv(sockfd, buf, len, flags);
+		if (rv == -1 && errno == EINTR)
+			continue;
+		return rv;
+	}
+}
 
 static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 {
@@ -48,7 +66,9 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	cl = &client[cl_ci];
 	fd = client[ca->ci_in].fd;
 
-	log_cmd(cmd, "cmd_acquire %d,%d,%d ci_in %d fd %d flags %x",
+	/*log_cmd(cmd, "cmd_acquire %d,%d,%d ci_in %d fd %d flags %x",
+		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd, ca->header.cmd_flags);*/
+	fprintf(stderr, "cmd_acquire %d,%d,%d ci_in %d fd %d flags %x\n",
 		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd, ca->header.cmd_flags);
 
 	pthread_mutex_lock(&cl->mutex);
@@ -68,8 +88,10 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 
 	rv = recv_loop(fd, &elk, sizeof(struct etcdlock), MSG_WAITALL);
 	if (rv != sizeof(struct etcdlock)) {
-		log_error("cmd_acquire %d,%d,%d recv elk %d %d",
-				  cl_ci, cl_fd, cl_pid, rv, errno);
+		/*log_error("cmd_acquire %d,%d,%d recv elk %d %d",
+				  cl_ci, cl_fd, cl_pid, rv, errno);*/
+		fprintf(stderr, "cmd_acquire %d,%d,%d recv elk %d %d\n",
+			  cl_ci, cl_fd, cl_pid, rv, errno);
 		result = -ENOTCONN;
 		goto done;
 	}
@@ -110,7 +132,9 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
  done:
 	pthread_mutex_lock(&etcdlocks_mutex);
 	pthread_mutex_lock(&cl->mutex);
-	log_cmd(cmd, "cmd_acquire %d,%d,%d result %d pid_dead %d",
+	/*log_cmd(cmd, "cmd_acquire %d,%d,%d result %d pid_dead %d",
+		  cl_ci, cl_fd, cl_pid, result, cl->pid_dead);*/
+	fprintf(stdin, "cmd_acquire %d,%d,%d result %d pid_dead %d\n",
 		  cl_ci, cl_fd, cl_pid, result, cl->pid_dead);
 
 	pid_dead = cl->pid_dead;
@@ -151,7 +175,9 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	}
 
  reply:
-	log_cmd(cmd, "cmd_acquire %d,%d,%d result %d",
+	/*log_cmd(cmd, "cmd_acquire %d,%d,%d result %d",
+		  cl_ci, cl_fd, cl_pid, result);*/
+	fprintf(stdin, "cmd_acquire %d,%d,%d result %d\n",
 		  cl_ci, cl_fd, cl_pid, result);
 	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
@@ -170,12 +196,16 @@ static void cmd_release(struct cmd_args *ca, uint32_t cmd)
 	cl = &client[cl_ci];
 	fd = client[ca->ci_in].fd;
 
-	log_cmd(cmd, "cmd_release %d,%d,%d ci_in %d fd %d",
+	/*log_cmd(cmd, "cmd_release %d,%d,%d ci_in %d fd %d",
+		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd);*/
+	fprintf(stdin, "cmd_release %d,%d,%d ci_in %d fd %d\n",
 		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd);
 
 	rv = recv_loop(fd, &elk, sizeof(struct etcdlock), MSG_WAITALL);
 	if (rv != sizeof(struct etcdlock)) {
-    	log_error("cmd_release %d,%d,%d recv elk %d %d",
+    	/*log_error("cmd_release %d,%d,%d recv elk %d %d",
+				  cl_ci, cl_fd, cl_pid, rv, errno);*/
+		fprintf(stderr, "cmd_release %d,%d,%d recv elk %d %d\n",
 				  cl_ci, cl_fd, cl_pid, rv, errno);
 		result = -ENOTCONN;
 		goto out;
@@ -185,7 +215,9 @@ static void cmd_release(struct cmd_args *ca, uint32_t cmd)
 
 out:	
 	pthread_mutex_lock(&cl->mutex);
-	log_cmd(cmd, "cmd_release %d,%d,%d result %d pid_dead %d",
+	/*log_cmd(cmd, "cmd_release %d,%d,%d result %d pid_dead %d",
+		  cl_ci, cl_fd, cl_pid, result, cl->pid_dead);*/
+	fprintf(stdin, "cmd_release %d,%d,%d result %d pid_dead %d\n",
 		  cl_ci, cl_fd, cl_pid, result, cl->pid_dead);
 
 	pid_dead = cl->pid_dead;
@@ -196,7 +228,9 @@ out:
 		cl->kill_last = 0;
 		cl->flags &= ~CL_RUNPATH_SENT;
 
-		log_cmd(cmd, "cmd_release %d,%d,%d clear kill state",
+		/*log_cmd(cmd, "cmd_release %d,%d,%d clear kill state",
+				cl_ci, cl_fd, cl_pid);*/
+		fprintf(stdin, "cmd_release %d,%d,%d clear kill state\n",
 				cl_ci, cl_fd, cl_pid);
 	}
 	pthread_mutex_unlock(&cl->mutex);
@@ -228,9 +262,43 @@ void call_cmd_thread(struct cmd_args *ca)
 	};
 }
 
+static ssize_t send_all(int sockfd, const void *buf, size_t len, int flags)
+{
+	size_t rem = len;
+	size_t off = 0;
+	ssize_t rv;
+
+retry:
+	rv = send(sockfd, (char *)buf + off, rem, flags);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+	if (rv < 0)
+		return -errno;
+	if (rv < rem) {
+		rem -= rv;
+		off += rv;
+		goto retry;
+	}
+	return 0;
+}
+
+static void cmd_version(int ci GNUC_UNUSED, int fd, struct em_header *h_recv)
+{
+	h_recv->magic = EM_MAGIC;
+	h_recv->version = EM_PROTO;
+	h_recv->cmd = EM_CMD_VERSION;
+	h_recv->cmd_flags = 0;
+	h_recv->length = sizeof(struct em_header);
+	h_recv->seq = 0;
+	h_recv->data = 0;
+	h_recv->data2 = 1;
+
+	send_all(fd, h_recv, sizeof(struct em_header), MSG_NOSIGNAL);
+}
+
 void call_cmd_daemon(int ci, struct em_header *h_recv, int client_maxi)
 {
-	int rv, pid, auto_close = 1;
+	int auto_close = 1;
 	int fd = client[ci].fd;
 	uint32_t cmd = h_recv->cmd;
 

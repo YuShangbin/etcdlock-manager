@@ -32,8 +32,6 @@
 #include <sys/utsname.h>
 #include <sys/resource.h>
 #include <sys/eventfd.h>
-#include <asm-generic/fcntl.h>
-#include <asm-generic/siginfo.h>
 #include <asm-generic/signal-defs.h>
 #include <linux/sched.h>
 #include <asm-generic/socket.h>
@@ -44,11 +42,15 @@
 #include "env.h"
 #include "etcdlock_manager_internal.h"
 #include "etcdlock_manager_sock.h"
-#include "libvirt_sanlock_helper.h"
+#include "libvirt_helper.h"
 #include "list.h"
 #include "log.h"
 #include "monotime.h"
 #include "timeouts.h"
+#include "watchdog.h"
+#include "etcdlock.h"
+#include "lockfile.h"
+#include "client.h"
 
 
 #define SIGRUNPATH 100 /* anything that's not SIGTERM/SIGKILL */
@@ -84,7 +86,9 @@ static int user_to_uid(char *arg)
 
 	pw = getpwnam(arg);
 	if (pw == NULL) {
-		log_error("user '%s' not found, "
+		/*fprintf(stderr, "user '%s' not found, "
+                          "using uid: %i", arg, DEFAULT_SOCKET_UID);*/
+		fprintf(stderr, "user '%s' not found, "
                           "using uid: %i", arg, DEFAULT_SOCKET_UID);
 		return DEFAULT_SOCKET_UID;
 	}
@@ -98,7 +102,9 @@ static int group_to_gid(char *arg)
 
 	gr = getgrnam(arg);
 	if (gr == NULL) {
-		log_error("group '%s' not found, "
+		/*fprintf(stderr, "group '%s' not found, "
+                          "using uid: %i", arg, DEFAULT_SOCKET_GID);*/
+		fprintf(stderr, "group '%s' not found, "
                           "using uid: %i", arg, DEFAULT_SOCKET_GID);
 		return DEFAULT_SOCKET_GID;
 	}
@@ -144,7 +150,8 @@ static void read_config_file(void)
 
 	if (stat(ETCDLK_MGR_CONF_PATH, &buf) < 0) {
 		if (errno != ENOENT)
-			log_error("%s stat failed: %d", ETCDLK_MGR_CONF_PATH, errno);
+			/*fprintf(stderr, "%s stat failed: %d", ETCDLK_MGR_CONF_PATH, errno);*/
+			fprintf(stderr, "%s stat failed: %d", ETCDLK_MGR_CONF_PATH, errno);
 		return;
 	}
 
@@ -320,7 +327,8 @@ static int read_command_line(int argc, char *argv[])
 		else if (!strcmp(act, "release"))
 			com.action = ACT_RELEASE;
 		else {
-			log_tool("client action \"%s\" is unknown", act);
+			/*log_tool("client action \"%s\" is unknown", act);*/
+			fprintf(stderr, "client action \"%s\" is unknown", act);
 			exit(EXIT_FAILURE);
 		}
 		break;
@@ -330,8 +338,10 @@ static int read_command_line(int argc, char *argv[])
 		p = argv[i];
 
 		if ((p[0] != '-') || (strlen(p) != 2)) {
-			log_tool("unknown option %s", p);
-			log_tool("space required before option value");
+			/*log_tool("unknown option %s", p);
+			log_tool("space required before option value");*/
+			fprintf(stderr, "unknown option %s", p);
+			fprintf(stderr, "space required before option value");
 			exit(EXIT_FAILURE);
 		}
 
@@ -346,7 +356,8 @@ static int read_command_line(int argc, char *argv[])
 		}
 
 		if (i >= argc) {
-			log_tool("option '%c' requires arg", optchar);
+			/*log_tool("option '%c' requires arg", optchar);*/
+			fprintf(stderr, "option '%c' requires arg", optchar);
 			exit(EXIT_FAILURE);
 		}
 
@@ -404,24 +415,25 @@ static int read_command_line(int argc, char *argv[])
 			begin_command = 1;
 			break;
 
-		case 'volume':
+		case 'v':
 		    com.volume = strdup(optionarg);
 		    break;
 
-		case 'pid':
+		case 'p':
 		    com.vm_pid = atoi(optionarg);
 		    break;
 		
-		case 'uri':
+		case 'r':
 		    com.vm_uri = strdup(optionarg);
 		    break;
 
-		case 'uuid':
+		case 'i':
 		    com.vm_uuid = strdup(optionarg);
 		    break;
 
 		default:
-			log_tool("unknown option: %c", optchar);
+			/*log_tool("unknown option: %c", optchar);*/
+			fprintf(stderr, "unknown option: %c", optchar);
 			exit(EXIT_FAILURE);
 		};
 
@@ -448,7 +460,8 @@ static int read_command_line(int argc, char *argv[])
 		cmd_argc = argc - i;
 
 		if (cmd_argc < 1) {
-			log_tool("command option (-c) requires an arg");
+			/*log_tool("command option (-c) requires an arg");*/
+			fprintf(stderr, "command option (-c) requires an arg");
 			return -EINVAL;
 		}
 
@@ -479,7 +492,8 @@ static void setup_groups(void)
 
 	rv = initgroups(com.uname, com.gid);
 	if (rv < 0) {
-		log_error("error initializing groups errno %i", errno);
+		/*fprintf(stderr, "error initializing groups errno %i", errno);*/
+		fprintf(stderr, "error initializing groups errno %i", errno);
 	}
 }
 
@@ -493,19 +507,22 @@ static void setup_limits(void)
 
 	rv = setrlimit(RLIMIT_MEMLOCK, &rlim);
 	if (rv < 0) {
-		log_error("cannot set the limits for memlock %i", errno);
+		/*fprintf(stderr, "cannot set the limits for memlock %i", errno);*/
+		fprintf(stderr, "cannot set the limits for memlock %i", errno);
 		exit(EXIT_FAILURE);
 	}
 
 	rv = setrlimit(RLIMIT_RTPRIO, &rlim);
 	if (rv < 0) {
-		log_error("cannot set the limits for rtprio %i", errno);
+		/*fprintf(stderr, "cannot set the limits for rtprio %i", errno);*/
+		fprintf(stderr, "cannot set the limits for rtprio %i", errno);
 		exit(EXIT_FAILURE);
 	}
 
 	rv = setrlimit(RLIMIT_CORE, &rlim);
 	if (rv < 0) {
-		log_error("cannot set the limits for core dumps %i", errno);
+		/*fprintf(stderr, "cannot set the limits for core dumps %i", errno);*/
+		fprintf(stderr, "cannot set the limits for core dumps %i", errno);
 		exit(EXIT_FAILURE);
 	}
 }
@@ -524,7 +541,8 @@ static int client_alloc(void)
 	pollfd = malloc((CLIENT_NALLOC+1) * sizeof(struct pollfd));
 
 	if (!client || !pollfd) {
-		log_error("can't alloc for client or pollfd array");
+		/*fprintf(stderr, "can't alloc for client or pollfd array");*/
+		fprintf(stderr, "can't alloc for client or pollfd array");
 		return -ENOMEM;
 	}
 
@@ -548,34 +566,37 @@ static void _client_free(int ci)
 	struct client *cl = &client[ci];
 
 	if (cl->cmd_active || cl->pid_dead)
-		log_client(ci, cl->fd, "free cmd %d dead %d", cl->cmd_active, cl->pid_dead);
+		/*log_client(ci, cl->fd, "free cmd %d dead %d", cl->cmd_active, cl->pid_dead);*/
+		fprintf(stderr, "client_free ci %d cmd %d dead %d", ci, cl->cmd_active, cl->pid_dead);
 	else
-		log_client(ci, cl->fd, "free");
+		/*log_client(ci, cl->fd, "free");*/
+		fprintf(stderr, "client_free ci %d", ci);
 
 	if (!cl->used) {
 		/* should never happen */
-		log_error("client_free ci %d not used", ci);
+		/*fprintf(stderr, "client_free ci %d not used", ci);*/
+		fprintf(stderr, "client_free ci %d not used", ci);
 		goto out;
 	}
 
 	if (cl->pid != -1) {
 		/* client_pid_dead() should have set pid to -1 */
 		/* should never happen */
-		log_error("client_free ci %d live pid %d", ci, cl->pid);
+		fprintf(stderr, "client_free ci %d live pid %d", ci, cl->pid);
 		goto out;
 	}
 
 	if (cl->fd == -1) {
 		/* should never happen */
-		log_error("client_free ci %d is free", ci);
+		fprintf(stderr, "client_free ci %d is free", ci);
 		goto out;
 	}
 
 	if (cl->need_free)
-		log_debug("client_free ci %d already need_free", ci);
+		fprintf(stderr, "client_free ci %d already need_free", ci);
 
 	if (cl->suspend) {
-		log_debug("client_free ci %d is suspended", ci);
+		fprintf(stderr, "client_free ci %d is suspended", ci);
 		cl->need_free = 1;
 		goto out;
 	}
@@ -630,26 +651,27 @@ static int client_suspend(int ci)
 
 	if (!cl->used) {
 		/* should never happen */
-		log_error("client_suspend ci %d not used", ci);
+		fprintf(stderr, "client_suspend ci %d not used", ci);
 		rv = -1;
 		goto out;
 	}
 
 	if (cl->fd == -1) {
 		/* should never happen */
-		log_error("client_suspend ci %d is free", ci);
+		fprintf(stderr, "client_suspend ci %d is free", ci);
 		rv = -1;
 		goto out;
 	}
 
 	if (cl->suspend) {
 		/* should never happen */
-		log_error("client_suspend ci %d is suspended", ci);
+		fprintf(stderr, "client_suspend ci %d is suspended", ci);
 		rv = -1;
 		goto out;
 	}
 
-	log_client(ci, cl->fd, "suspend");
+	/*log_client(ci, cl->fd, "suspend");*/
+	fprintf(stderr, "client_suspend ci %d", ci);
 
 	cl->suspend = 1;
 
@@ -671,28 +693,29 @@ void client_resume(int ci)
 
 	if (!cl->used) {
 		/* should never happen */
-		log_error("client_resume ci %d not used", ci);
+		fprintf(stderr, "client_resume ci %d not used", ci);
 		goto out;
 	}
 
 	if (cl->fd == -1) {
 		/* should never happen */
-		log_error("client_resume ci %d is free", ci);
+		fprintf(stderr, "client_resume ci %d is free", ci);
 		goto out;
 	}
 
 	if (!cl->suspend) {
 		/* should never happen */
-		log_error("client_resume ci %d not suspended", ci);
+		fprintf(stderr, "client_resume ci %d not suspended", ci);
 		goto out;
 	}
 
-	log_client(ci, cl->fd, "resume");
+	/*log_client(ci, cl->fd, "resume");*/
+	fprintf(stderr, "client_resume ci %d", ci);
 
 	cl->suspend = 0;
 
 	if (cl->need_free) {
-		log_debug("client_resume ci %d need_free", ci);
+		fprintf(stderr, "client_resume ci %d need_free", ci);
 		_client_free(ci);
 	} else {
 		/* make poll() watch this connection */
@@ -728,7 +751,8 @@ static int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
 				client_maxi = i;
 			pthread_mutex_unlock(&cl->mutex);
 
-			log_client(i, fd, "add");
+			/*log_client(i, fd, "add");*/
+			fprintf(stderr, "client_add ci %d fd %d", i, fd);
 			return i;
 		}
 		pthread_mutex_unlock(&cl->mutex);
@@ -796,7 +820,7 @@ static int thread_pool_add_work(struct cmd_args *ca)
 		rv = pthread_create(&th, NULL, thread_pool_worker,
 				    (void *)(long)pool.num_workers);
 		if (rv) {
-			log_error("thread_pool_add_work ci %d error %d", ca->ci_in, rv);
+			fprintf(stderr, "thread_pool_add_work ci %d error %d", ca->ci_in, rv);
 			list_del(&ca->list);
 			pthread_mutex_unlock(&pool.mutex);
 			rv = -1;
@@ -844,7 +868,7 @@ static int thread_pool_create(int min_workers, int max_workers)
 		rv = pthread_create(&th, NULL, thread_pool_worker,
 				    (void *)(long)i);
 		if (rv) {
-			log_error("thread_pool_create failed %d", rv);
+			fprintf(stderr, "thread_pool_create failed %d", rv);
 			rv = -1;
 			break;
 		}
@@ -945,11 +969,11 @@ static void process_helper(int ci)
 	if (!rv || rv == -EAGAIN)
 		return;
 	if (rv < 0) {
-		log_error("process_helper rv %d errno %d", rv, errno);
+		fprintf(stderr, "process_helper rv %d errno %d", rv, errno);
 		goto fail;
 	}
 	if (rv != sizeof(hs)) {
-		log_error("process_helper recv size %d", rv);
+		fprintf(stderr, "process_helper recv size %d", rv);
 		goto fail;
 	}
 
@@ -975,24 +999,24 @@ static void helper_dead(int ci GNUC_UNUSED)
 
 	if (rv != pid) {
 		/* should not happen */
-		log_error("helper pid %d dead wait %d", pid, rv);
+		fprintf(stderr, "helper pid %d dead wait %d", pid, rv);
 		return;
 	}
 
 	if (WIFEXITED(status)) {
-		log_error("helper pid %d exit status %d", pid,
+		fprintf(stderr, "helper pid %d exit status %d", pid,
 			  WEXITSTATUS(status));
 		return;
 	}
 
 	if (WIFSIGNALED(status)) {
-		log_error("helper pid %d term signal %d", pid,
+		fprintf(stderr, "helper pid %d term signal %d", pid,
 			  WTERMSIG(status));
 		return;
 	}
 
 	/* should not happen */
-	log_error("helper pid %d state change", pid);
+	fprintf(stderr, "helper pid %d state change", pid);
 }
 
 static void sigterm_handler(int sig GNUC_UNUSED,
@@ -1015,7 +1039,7 @@ static void setup_signals(void)
 	for (i = 0; sig_list[i] != 0; i++) {
 		rv = sigaction(sig_list[i], &act, NULL);
 		if (rv < 0) {
-			log_error("cannot set the signal handler for: %i", sig_list[i]);
+			fprintf(stderr, "cannot set the signal handler for: %i", sig_list[i]);
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -1030,12 +1054,12 @@ static void setup_uid_gid(void)
 
 	rv = setgid(com.gid);
 	if (rv < 0) {
-		log_error("cannot set group id to %i errno %i", com.gid, errno);
+		fprintf(stderr, "cannot set group id to %i errno %i", com.gid, errno);
 	}
 
 	rv = setuid(com.uid);
 	if (rv < 0) {
-		log_error("cannot set user id to %i errno %i", com.uid, errno);
+		fprintf(stderr, "cannot set user id to %i errno %i", com.uid, errno);
 	}
 
 	/* When a program is owned by a user (group) other than the real user
@@ -1044,7 +1068,7 @@ static void setup_uid_gid(void)
 	 */
 	rv = prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
 	if (rv < 0) {
-		log_error("cannot set dumpable process errno %i", errno);
+		fprintf(stderr, "cannot set dumpable process errno %i", errno);
 	}
 }
 
@@ -1059,7 +1083,7 @@ static void setup_priority(void)
 		rv = mlockall(MCL_CURRENT | MCL_FUTURE);
 
 	if (rv < 0) {
-		log_error("mlockall %d failed: %s",
+		fprintf(stderr, "mlockall %d failed: %s",
 			  com.mlock_level, strerror(errno));
 	}
 
@@ -1068,15 +1092,45 @@ static void setup_priority(void)
 
 	rv = sched_get_priority_max(SCHED_RR);
 	if (rv < 0) {
-		log_error("could not get max scheduler priority err %d", errno);
+		fprintf(stderr, "could not get max scheduler priority err %d", errno);
 		return;
 	}
 
 	sched_param.sched_priority = rv;
 	rv = sched_setscheduler(0, SCHED_RR|SCHED_RESET_ON_FORK, &sched_param);
 	if (rv < 0) {
-		log_error("set scheduler RR|RESET_ON_FORK priority %d failed: %s",
+		fprintf(stderr, "set scheduler RR|RESET_ON_FORK priority %d failed: %s",
 			  sched_param.sched_priority, strerror(errno));
+	}
+}
+
+void send_result(int ci, int fd, struct em_header *h_recv, int result);
+void send_result(int ci, int fd, struct em_header *h_recv, int result)
+{
+	struct em_header h;
+	size_t rem = sizeof(h);
+	size_t off = 0;
+	ssize_t rv;
+
+	/*log_client(ci, fd, "send %d", result);*/
+	fprintf(stdin, "send %d\n", result);
+
+	memcpy(&h, h_recv, sizeof(struct em_header));
+	h.version = EM_PROTO;
+	h.length = sizeof(h);
+	h.data = result;
+	h.data2 = 0;
+
+retry:
+	rv = send(fd, (char *)&h + off, rem, MSG_NOSIGNAL);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+	if (rv < 0)
+		return;
+	if (rv < rem) {
+		rem -= rv;
+		off += rv;
+		goto retry;
 	}
 }
 
@@ -1090,148 +1144,159 @@ static void setup_priority(void)
  * processing and handle the cleanup of the client if so.
  */
 
- static void process_cmd_thread_registered(int ci_in, struct em_header *h_recv)
- {
-	 struct cmd_args *ca;
-	 struct client *cl;
-	 int result = 0;
-	 int for_pid = -1, for_client_id = -1;
-	 int rv, i, ci_target = -1;
+static void process_cmd_thread_registered(int ci_in, struct em_header *h_recv)
+{
+	struct cmd_args *ca;
+	struct client *cl;
+	int result = 0;
+	int for_pid = -1, for_client_id = -1;
+	int rv, i, ci_target = -1;
  
-	 ca = malloc(sizeof(struct cmd_args));
-	 if (!ca) {
-		 result = -ENOMEM;
-		 goto fail;
-	 }
+	ca = malloc(sizeof(struct cmd_args));
+	if (!ca) {
+		result = -ENOMEM;
+		goto fail;
+	}
+	cl = malloc(sizeof(struct client));
+	if (!cl) {
+		result = -ENOMEM;
+		goto fail;
+	}
  
-	 if (h_recv->data2 != -1) {
-		 /* lease for another registered client with pid or client_id specified by data2 */
+	if (h_recv->data2 != -1) {
+		/* lease for another registered client with pid or client_id specified by data2 */
  
-		 for_pid = h_recv->data2;
+		for_pid = h_recv->data2;
  
-		 for (i = 0; i < client_size; i++) {
-			 cl = &client[i];
-			 pthread_mutex_lock(&cl->mutex);
+		for (i = 0; i < client_size; i++) {
+			cl = &client[i];
+			pthread_mutex_lock(&cl->mutex);
  
-			 if (for_pid > -1) {
-				 if (cl->pid != for_pid) {
-					 pthread_mutex_unlock(&cl->mutex);
-					 continue;
-				 }
-			 } else if (for_client_id > -1) {
-				 if (i != for_client_id) {
-					 pthread_mutex_unlock(&cl->mutex);
-					 continue;
-				 }
-			 }
+			if (for_pid > -1) {
+				if (cl->pid != for_pid) {
+					pthread_mutex_unlock(&cl->mutex);
+					continue;
+				}
+			} else if (for_client_id > -1) {
+				if (i != for_client_id) {
+					pthread_mutex_unlock(&cl->mutex);
+					continue;
+				}
+			}
  
-			 ci_target = i;
-			 break;
-		 }
+			ci_target = i;
+			break;
+		}
  
-		 log_client(ci_in, client[ci_in].fd, "process reg cmd %u for target ci %d pid %d",
-				h_recv->cmd, ci_target, client[ci_target].pid);
-	 } else {
-		 /* lease for this registered client */
+		/*log_client(ci_in, client[ci_in].fd, "process reg cmd %u for target ci %d pid %d",
+			h_recv->cmd, ci_target, client[ci_target].pid);*/
+		fprintf(stderr, "process reg cmd %u for target ci %d pid %d",
+			h_recv->cmd, ci_target, client[ci_target].pid);
+	} else {
+		/* lease for this registered client */
  
-		 log_client(ci_in, client[ci_in].fd, "process reg cmd %u", h_recv->cmd);
+		/*log_client(ci_in, client[ci_in].fd, "process reg cmd %u", h_recv->cmd);*/
+		fprintf(stderr, "process reg cmd %u", h_recv->cmd);
  
-		 ci_target = ci_in;
-		 cl = &client[ci_target];
-		 pthread_mutex_lock(&cl->mutex);
-	 }
+		ci_target = ci_in;
+		cl = &client[ci_target];
+		pthread_mutex_lock(&cl->mutex);
+	}
  
-	 if (!cl->used) {
-		 log_error("cmd %d %d,%d,%d not used",
-			   h_recv->cmd, ci_target, cl->fd, cl->pid);
-		 result = -EBUSY;
-		 goto out;
-	 }
+	if (!cl->used) {
+		fprintf(stderr, "cmd %d %d,%d,%d not used",
+			h_recv->cmd, ci_target, cl->fd, cl->pid);
+		result = -EBUSY;
+		goto out;
+	}
  
-	 if (cl->pid <= 0) {
-		 log_error("cmd %d %d,%d,%d no pid",
-			   h_recv->cmd, ci_target, cl->fd, cl->pid);
-		 result = -EBUSY;
-		 goto out;
-	 }
+	if (cl->pid <= 0) {
+		fprintf(stderr, "cmd %d %d,%d,%d no pid",
+			h_recv->cmd, ci_target, cl->fd, cl->pid);
+		result = -EBUSY;
+		goto out;
+	}
  
-	 if (cl->pid_dead) {
-		 log_error("cmd %d %d,%d,%d pid_dead",
-			   h_recv->cmd, ci_target, cl->fd, cl->pid);
-		 result = -EBUSY;
-		 goto out;
-	 }
+	if (cl->pid_dead) {
+		fprintf(stderr, "cmd %d %d,%d,%d pid_dead",
+			h_recv->cmd, ci_target, cl->fd, cl->pid);
+		result = -EBUSY;
+		goto out;
+	}
  
-	 if (cl->need_free) {
-		 log_error("cmd %d %d,%d,%d need_free",
-			   h_recv->cmd, ci_target, cl->fd, cl->pid);
-		 result = -EBUSY;
-		 goto out;
-	 }
+	if (cl->need_free) {
+		fprintf(stderr, "cmd %d %d,%d,%d need_free",
+			h_recv->cmd, ci_target, cl->fd, cl->pid);
+		result = -EBUSY;
+		goto out;
+	}
  
-	 if (cl->kill_count && h_recv->cmd == EM_CMD_ACQUIRE) {
-		 /* when pid is being killed, we want killpath to be able
-			to inquire and release for it */
-		 log_error("cmd %d %d,%d,%d kill_count %d",
-			   h_recv->cmd, ci_target, cl->fd, cl->pid, cl->kill_count);
-		 result = -EBUSY;
-		 goto out;
-	 }
+	if (cl->kill_count && h_recv->cmd == EM_CMD_ACQUIRE) {
+		/* when pid is being killed, we want killpath to be able
+		 to inquire and release for it */
+		fprintf(stderr, "cmd %d %d,%d,%d kill_count %d",
+			h_recv->cmd, ci_target, cl->fd, cl->pid, cl->kill_count);
+		result = -EBUSY;
+		goto out;
+	}
  
-	 if (cl->cmd_active) {
-		 if (com.quiet_fail && cl->cmd_active == EM_CMD_ACQUIRE) {
-			 result = -EBUSY;
-			 goto out;
-		 }
-		 log_error("cmd %d %d,%d,%d cmd_active %d",
-			   h_recv->cmd, ci_target, cl->fd, cl->pid,
-			   cl->cmd_active);
-		 result = -EBUSY;
-		 goto out;
-	 }
+	if (cl->cmd_active) {
+		if (com.quiet_fail && cl->cmd_active == EM_CMD_ACQUIRE) {
+			result = -EBUSY;
+			goto out;
+		}
+		fprintf(stderr, "cmd %d %d,%d,%d cmd_active %d",
+			h_recv->cmd, ci_target, cl->fd, cl->pid,
+			cl->cmd_active);
+		result = -EBUSY;
+		goto out;
+	}
  
-	 cl->cmd_active = h_recv->cmd;
+	cl->cmd_active = h_recv->cmd;
  
-	 /* once cmd_active is set, client_pid_dead() will not call client_free, 
-	    so it's the responsiblity of cmd_a,r,i_thread
-		to check if pid_dead when clearing cmd_active, and doing the cleanup
-		if pid is dead */
-  out:
-	 pthread_mutex_unlock(&cl->mutex);
+	/* once cmd_active is set, client_pid_dead() will not call client_free, 
+	so it's the responsiblity of cmd_a,r,i_thread
+	to check if pid_dead when clearing cmd_active, and doing the cleanup
+	if pid is dead */
+out:
+	pthread_mutex_unlock(&cl->mutex);
  
-	 if (result < 0)
-		 goto fail;
+	if (result < 0)
+		goto fail;
  
-	 ca->ci_in = ci_in;
-	 ca->ci_target = ci_target;
-	 ca->cl_pid = cl->pid;
-	 ca->cl_fd = cl->fd;
-	 memcpy(&ca->header, h_recv, sizeof(struct em_header));
+	ca->ci_in = ci_in;
+	ca->ci_target = ci_target;
+	ca->cl_pid = cl->pid;
+	ca->cl_fd = cl->fd;
+	memcpy(&ca->header, h_recv, sizeof(struct em_header));
  
-	 rv = thread_pool_add_work(ca);
-	 if (rv < 0) {
-		 /* we don't have to worry about client_pid_dead having
-			been called while mutex was unlocked with cmd_active set,
-			because client_pid_dead is called from the main thread which
-			is running this function */
+	rv = thread_pool_add_work(ca);
+	if (rv < 0) {
+		/* we don't have to worry about client_pid_dead having
+		been called while mutex was unlocked with cmd_active set,
+		because client_pid_dead is called from the main thread which
+		is running this function */
  
-		 log_error("create cmd thread failed");
-		 pthread_mutex_lock(&cl->mutex);
-		 cl->cmd_active = 0;
-		 pthread_mutex_unlock(&cl->mutex);
-		 result = rv;
-		 goto fail;
-	 }
-	 return;
+		fprintf(stderr, "create cmd thread failed");
+		pthread_mutex_lock(&cl->mutex);
+		cl->cmd_active = 0;
+		pthread_mutex_unlock(&cl->mutex);
+		result = rv;
+		free(cl);
+		goto fail;
+	}
+
+	free(cl);
+	return;
  
-  fail:
-	 log_error("process_cmd_thread_reg failed ci %d fd %d cmd %u", ci_in, client[ci_in].fd, h_recv->cmd);
-	 send_result(ci_in, client[ci_in].fd, h_recv, result);
-	 client_resume(ci_in);
+fail:
+	fprintf(stderr, "process_cmd_thread_reg failed ci %d fd %d cmd %u", ci_in, client[ci_in].fd, h_recv->cmd);
+	send_result(ci_in, client[ci_in].fd, h_recv, result);
+	client_resume(ci_in);
  
-	 if (ca)
-		 free(ca);
- }
+	if (ca)
+		free(ca);
+}
 
 static void process_connection(int ci)
 {
@@ -1248,26 +1313,27 @@ static void process_connection(int ci)
 	if (!rv)
 		goto dead;
 
-	log_client(ci, client[ci].fd, "recv %d %u", rv, h.cmd);
+	/*log_client(ci, client[ci].fd, "recv %d %u", rv, h.cmd);*/
+	fprintf(stderr, "recv %d %u", rv, h.cmd);
 
 	if (rv < 0) {
-		log_error("client connection %d %d %d recv msg header rv %d errno %d",
+		fprintf(stderr, "client connection %d %d %d recv msg header rv %d errno %d",
 			  ci, client[ci].fd, client[ci].pid, rv, errno);
 		goto bad;
 	}
 	if (rv != sizeof(h)) {
-		log_error("client connection %d %d %d recv msg header rv %d cmd %u len %u",
+		fprintf(stderr, "client connection %d %d %d recv msg header rv %d cmd %u len %u",
 			  ci, client[ci].fd, client[ci].pid, rv, h.cmd, h.length);
 		goto bad;
 	}
 	if (h.magic != EM_MAGIC) {
-		log_error("client connection %d %d %d recv msg header rv %d cmd %u len %u magic %x vs %x",
+		fprintf(stderr, "client connection %d %d %d recv msg header rv %d cmd %u len %u magic %x vs %x",
 			  ci, client[ci].fd, client[ci].pid, rv, h.cmd, h.length, h.magic, EM_MAGIC);
 		goto bad;
 	}
 	if (h.version && (h.cmd != EM_CMD_VERSION) &&
 	    (h.version & 0xFFFF0000) > (EM_PROTO & 0xFFFF0000)) {
-		log_error("client connection %d %d %d recv msg header rv %d cmd %u len %u version %x",
+		fprintf(stderr, "client connection %d %d %d recv msg header rv %d cmd %u len %u version %x",
 			  ci, client[ci].fd, client[ci].pid, rv, h.cmd, h.length, h.version);
 		goto bad;
 	}
@@ -1288,7 +1354,7 @@ static void process_connection(int ci)
 		process_cmd_thread_registered(ci, &h);
 		break;
 	default:
-		log_error("client connection ci %d fd %d pid %d cmd %d unknown",
+		fprintf(stderr, "client connection ci %d fd %d pid %d cmd %d unknown",
 			  ci, client[ci].fd, client[ci].pid, h.cmd);
 		goto bad;
 	};
@@ -1299,7 +1365,8 @@ static void process_connection(int ci)
 	return;
 
  dead:
-	log_client(ci, client[ci].fd, "recv dead");
+	/*log_client(ci, client[ci].fd, "recv dead");*/
+	fprintf(stderr, "recv dead");
 	deadfn = client[ci].deadfn;
 	if (deadfn)
 		deadfn(ci);
@@ -1343,7 +1410,7 @@ static int setup_listener(void)
 
 	rv = chown(addr.sun_path, com.uid, com.gid);
 	if (rv < 0) {
-		log_error("could not set socket %s permissions: %s",
+		fprintf(stderr, "could not set socket %s permissions: %s",
 			addr.sun_path, strerror(errno));
 		goto exit_fail;
 	}
@@ -1383,7 +1450,7 @@ static void send_helper_kill(struct etcdlock *elk, struct client *cl, int sig)
 		return;
 
 	if (helper_kill_fd == -1) {
-		log_error("send_helper_kill pid %d no fd", cl->pid);
+		fprintf(stderr, "send_helper_kill pid %d no fd", cl->pid);
 		return;
 	}
 
@@ -1403,7 +1470,8 @@ static void send_helper_kill(struct etcdlock *elk, struct client *cl, int sig)
 		hm.pid = cl->pid;
 	}
 
-	log_erros(elk, "kill %d sig %d count %d", cl->pid, sig, cl->kill_count);
+	/*log_erros(elk, "kill %d sig %d count %d", cl->pid, sig, cl->kill_count);*/
+	fprintf(stdin, "kill %d sig %d count %d\n", cl->pid, sig, cl->kill_count);
 
  retry:
 	rv = write(helper_kill_fd, &hm, sizeof(hm));
@@ -1413,21 +1481,26 @@ static void send_helper_kill(struct etcdlock *elk, struct client *cl, int sig)
 	/* pipe is full, we'll try again in a second */
 	if (rv == -1 && errno == EAGAIN) {
 		helper_full_count++;
-		log_etcdlock(elk, "send_helper_kill pid %d sig %d full_count %u",
+		/*log_etcdlock(elk, "send_helper_kill pid %d sig %d full_count %u",
+			  cl->pid, sig, helper_full_count);*/
+		fprintf(stdin, "send_helper_kill pid %d sig %d full_count %u\n",
 			  cl->pid, sig, helper_full_count);
 		return;
 	}
 
 	/* helper exited or closed fd, quit using helper */
 	if (rv == -1 && errno == EPIPE) {
-		log_erros(elk, "send_helper_kill EPIPE");
+		/*log_erros(elk, "send_helper_kill EPIPE");*/
+		fprintf(stdin, "send_helper_kill EPIPE\n");
 		close_helper();
 		return;
 	}
 
 	if (rv != sizeof(hm)) {
 		/* this shouldn't happen */
-		log_erros(elk, "send_helper_kill pid %d error %d %d",
+		/*log_erros(elk, "send_helper_kill pid %d error %d %d",
+			  cl->pid, rv, errno);*/
+		fprintf(stdin, "send_helper_kill pid %d error %d %d\n",
 			  cl->pid, rv, errno);
 		close_helper();
 		return;
@@ -1443,7 +1516,7 @@ static void kill_pid(struct etcdlock *elk)
 	uint64_t now, last_success;
 	int keepalive_fail_timeout_seconds;
 	int sig;
-	int in_grace;
+	int do_kill = 0, in_grace;
 
 	/*
 	 * remaining pid using elk is stuck, we've made max attempts to
@@ -1502,8 +1575,13 @@ static void kill_pid(struct etcdlock *elk)
 	} else {
 		sig = SIGKILL;
 	}
+
+	do_kill = 1;
 unlock:
 	pthread_mutex_unlock(&cl->mutex);
+
+	if (!do_kill)
+		return;
 
 	send_helper_kill(elk, cl, sig);
 }
@@ -1512,7 +1590,6 @@ static int pid_dead(struct etcdlock *elk)
 {
 	struct client *cl;
 	int stuck = 0, check = 0;
-	int ci;
 
 	pthread_mutex_lock(&elk->mutex);
 	cl = elk->client;
@@ -1533,7 +1610,8 @@ unlock:
 	pthread_mutex_unlock(&cl->mutex);
 
 	if (stuck && !check && elk->killing_pid < 2) {
-		log_erros(elk, "killing pids stuck %d", stuck);
+		/*log_erros(elk, "killing pids stuck %d", stuck);*/
+		fprintf(stdin, "killing pids stuck %d\n", stuck);
 		/* cause kill_pid to give up */
 		elk->killing_pid = 2;
 	}
@@ -1542,9 +1620,11 @@ unlock:
 		return 0;
 
 	if (elk->keepalive_fail)
-		log_erros(elk, "pid clear");
+		/*log_erros(elk, "pid clear");*/
+		fprintf(stdin, "pid clear\n");
 	else
-		log_etcdlock(elk, "pid clear");
+		/*log_etcdlock(elk, "pid clear");*/
+		fprintf(stdin, "pid clear\n");
 
 	return 1;
 }
@@ -1566,9 +1646,7 @@ static int main_loop(void)
 	struct timeval now, last_check;
 	int poll_timeout, check_interval;
 	unsigned int ms;
-	int i, rv, empty, check_all;
-	char *check_buf = NULL;
-	int check_buf_len = 0;
+	int i, rv, empty;
 	uint64_t ebuf;
 
 	gettimeofday(&last_check, NULL);
@@ -1585,7 +1663,8 @@ static int main_loop(void)
 			continue;
 		if (rv < 0) {
 			/* not sure */
-			log_client(0, 0, "poll err %d", rv);
+			/*log_client(0, 0, "poll err %d", rv);*/
+			fprintf(stdin, "poll err %d\n", rv);
 		}
 		for (i = 0; i <= client_maxi + 1; i++) {
 			/*
@@ -1596,7 +1675,8 @@ static int main_loop(void)
 			 */
 			if (pollfd[i].fd == efd) {
 				if (pollfd[i].revents & POLLIN) {
-					log_client(i, efd, "efd wake"); /* N.B. i is not a ci */
+					/*log_client(i, efd, "efd wake");*/ /* N.B. i is not a ci */
+					fprintf(stdin, "efd wake\n");
 					eventfd_read(efd, &ebuf);
 				}
 				continue;
@@ -1616,7 +1696,8 @@ static int main_loop(void)
 					workfn(i);
 			}
 			if (pollfd[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-				log_client(i, client[i].fd, "poll dead");
+				/*log_client(i, client[i].fd, "poll dead");*/
+				fprintf(stdin, "poll dead\n");
 				deadfn = client[i].deadfn;
 				if (deadfn)
 					deadfn(i);
@@ -1645,7 +1726,8 @@ static int main_loop(void)
 				 * delete elk from etcdlocks so main_loop
 				 * will no longer see it.
 				 */
-				log_etcdlock(elk, "set thread_stop");
+				/*log_etcdlock(elk, "set thread_stop");*/
+				fprintf(stdin, "set thread_stop\n");
 				pthread_mutex_lock(&elk->mutex);
 				elk->thread_stop = 1;
 				deactivate_watchdog(elk);
@@ -1682,7 +1764,7 @@ static int main_loop(void)
 			break;
 
 		if (external_shutdown == 1) {
-			log_debug("ignore shutdown, etcdlock exists");
+			fprintf(stderr, "ignore shutdown, etcdlock exists");
 			external_shutdown = 0;
 		}
 
@@ -1701,7 +1783,6 @@ static int main_loop(void)
 
 static int do_daemon(void)
 {
-	struct utsname nodename;
 	int fd, rv;
 
 	run_dir = env_get(ETCDLOCK_MGR_RUN_DIR, DEFAULT_RUN_DIR);
@@ -1727,10 +1808,12 @@ static int do_daemon(void)
 	setup_logging();
 
 	if (strcmp(run_dir, DEFAULT_RUN_DIR))
-		log_warn("Using non-standard run directory '%s'", run_dir);
+		/*log_warn("Using non-standard run directory '%s'", run_dir);*/
+		fprintf(stderr, "Using non-standard run directory '%s'\n", run_dir);
 
 	if (!privileged)
-		log_warn("Running in unprivileged mode");
+		/*log_warn("Running in unprivileged mode");*/
+		fprintf(stderr, "Running in unprivileged mode\n");
 
 	/* If we run as root, make run_dir owned by root, so we can create the
 	 * lockfile when selinux disables DAC_OVERRIDE.
@@ -1746,12 +1829,15 @@ static int do_daemon(void)
 	setup_uid_gid();
 
 	if (com.base_timeout != DEFAULT_BASE_TIMEOUT || com.watchdog_fire_timeout != DEFAULT_WATCHDOG_FIRE_TIMEOUT) {
-		log_warn("etcdlock_manager daemon started base_timeout %u watchdog_fire_timeout %u",
-			 com.base_timeout, com.watchdog_fire_timeout);
+		/*log_warn("etcdlock_manager daemon started base_timeout %u watchdog_fire_timeout %u",
+			 com.base_timeout, com.watchdog_fire_timeout);*/
+		fprintf(stderr, "etcdlock_manager daemon started base_timeout %u watchdog_fire_timeout %u\n",
+			com.base_timeout, com.watchdog_fire_timeout);
 		syslog(LOG_INFO, "etcdlock_manager daemon started base_timeout %u watchdog_fire_timeout %u",
 			 com.base_timeout, com.watchdog_fire_timeout);
 	} else {
-		log_warn("etcdlock_manager daemon started");
+		/*log_warn("etcdlock_manager daemon started");*/
+		fprintf(stderr, "etcdlock_manager daemon started\n");
 		syslog(LOG_INFO, "etcdlock_manager daemon started");
 	}
 
@@ -1767,7 +1853,7 @@ static int do_daemon(void)
 
 	/* initialize global eventfd for client_resume notification */
 	if ((efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)) == -1) {
-		log_error("couldn't create eventfd");
+		fprintf(stderr, "couldn't create eventfd");
 		goto out_threads;
 	}
 
@@ -1785,39 +1871,45 @@ static int do_daemon(void)
 static int do_client(void)
 {
 	int id = -1;
-	int i, fd;
 	int rv = 0;
 
 	switch (com.action) {
 	case ACT_ACQUIRE:
 		if (com.vm_pid > -1) {
-			log_tool("acquire pid %d", com.vm_pid);
+			/*log_tool("acquire pid %d", com.vm_pid);*/
+			fprintf(stdin, "acquire pid %d\n", com.vm_pid);
 			id = com.vm_pid;
 		} else if (com.cid > -1) {
-			log_tool("acquire client_id %d", com.cid);
+			/*log_tool("acquire client_id %d", com.cid);*/
+			fprintf(stdin, "acquire client_id %d\n", com.cid);
 			id = com.cid;
 		}
-		rv = etcdlock_acquire(-1, id, com.volume, com.vm_pid, com.vm_uri, com.vm_uuid);
-		log_tool("acquire done %d", rv);
+		rv = etcdlock_acquire(-1, com.volume, com.vm_pid, com.vm_uri, com.vm_uuid);
+		/*log_tool("acquire done %d", rv);*/
+		fprintf(stdin, "acquire done %d\n", rv);
 		break;
 
 	case ACT_RELEASE:
 		if (com.vm_pid > -1) {
-			log_tool("release pid %d", com.vm_pid);
+			/*log_tool("release pid %d", com.vm_pid);*/
+			fprintf(stdin, "release pid %d\n", com.vm_pid);
 			id = com.vm_pid;
 		} else if (com.cid > -1) {
-			log_tool("release client_id %d", com.cid);
+			/*log_tool("release client_id %d", com.cid);*/
+			fprintf(stdin, "release client_id %d\n", com.cid);
 			id = com.cid;
 		}
 		rv = etcdlock_release(-1, id, com.volume);
-		log_tool("release done %d", rv);
+		/*log_tool("release done %d", rv);*/
+		fprintf(stdin, "release done %d\n", rv);
 		break;
 
 	default:
-		log_tool("action not implemented");
+		/*log_tool("action not implemented");*/
+		fprintf(stdin, "action not implemented\n");
 		rv = -1;
 	}
- out:
+
 	return rv;
 }
 

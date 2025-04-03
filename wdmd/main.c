@@ -7,7 +7,11 @@
  * of the GNU General Public License v2 or (at your option) any later version.
  */
 
- #define _GNU_SOURCE
+#define _POSIX_C_SOURCE 200112L
+
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 
 #include <inttypes.h>
 #include <unistd.h>
@@ -39,9 +43,6 @@
 #include <sys/signalfd.h>
 #include <linux/watchdog.h>
 #include <linux/limits.h>
-#include <linux/time.h>
-#include <asm-generic/socket.h>
-#include <asm-generic/fcntl.h>
 #include <asm-generic/signal-defs.h>
 #include <linux/sched.h>
 

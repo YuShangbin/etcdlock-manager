@@ -39,6 +39,26 @@ static unsigned int log_pending_ents;
 static unsigned int log_dropped;
 
 extern int log_stderr_priority;
+extern int log_logfile_priority;
+extern int log_syslog_priority;
+
+static void write_entry(int level, char *str)
+{
+	/*if ((level <= log_logfile_priority) && logfile_fp) {
+		fprintf(logfile_fp, "%s", str);
+		fflush(logfile_fp);
+	}
+	if (level <= log_syslog_priority)
+		syslog(level, "%s", str);*/
+	return;
+}
+
+static void write_dropped(int level, int num)
+{
+	char str[LOG_STR_LEN];
+	sprintf(str, "dropped %d entries", num);
+	write_entry(level, str);
+}
 
 static void *log_thread_fn(void *arg GNUC_UNUSED)
 {

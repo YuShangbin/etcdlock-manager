@@ -23,6 +23,8 @@
 
 #include "etcdlock_manager_internal.h"
 #include "etcdlock_manager_sock.h"
+#include "env.h"
+#include "client.h"
 
 #ifndef GNUC_UNUSED
 #define GNUC_UNUSED __attribute__((__unused__))
@@ -126,12 +128,22 @@ retry:
 int etcdlock_acquire(int sock, char *volume, int vm_pid, char *vm_uri, char *vm_uuid)
 {
     struct etcdlock *elk;
-    int rv, i, fd, data2;
+    int rv, fd, data2;
     int datalen = 0;
+	char *value = NULL;
+
+    /* Allocate memory for etcdlock structure */
+    elk = malloc(sizeof(struct etcdlock));
+	if (!elk)
+        return -ENOMEM;
 
     datalen += sizeof(struct etcdlock);
+	value = malloc(128 * sizeof(char));
+	if (value){
+		snprintf(value, 128, "%d", vm_pid);
+	}
     elk->key = volume;
-    elk->value = vm_pid;
+    elk->value = value;
     elk->vm_uri = vm_uri;
     elk->vm_uuid = vm_uuid;
 
@@ -142,8 +154,10 @@ int etcdlock_acquire(int sock, char *volume, int vm_pid, char *vm_uri, char *vm_
         data2 = vm_pid;
 
         rv = connect_socket(&fd);
-        if (rv < 0)
-            return rv;
+        if (rv < 0){
+			rv = -1;
+			goto out;
+		}           
     } else {
         /* use our own existing registered connection and ask daemon
            to acquire a lease for self */
@@ -153,10 +167,12 @@ int etcdlock_acquire(int sock, char *volume, int vm_pid, char *vm_uri, char *vm_
     }
 
     rv = send_header(fd, EM_CMD_ACQUIRE, datalen, data2);
-    if (rv < 0)
-        return rv;
+    if (rv < 0){
+		rv = -1;
+		goto out;
+	}
 
-    rv = send_data(fd, &elk, sizeof(struct etcdlock), 0);
+    rv = send_data(fd, elk, sizeof(struct etcdlock), 0);
     if (rv < 0) {
         rv = -1;
         goto out;
@@ -165,7 +181,14 @@ int etcdlock_acquire(int sock, char *volume, int vm_pid, char *vm_uri, char *vm_
     rv = recv_result(fd);
 out:
     if (sock == -1)
-        close(fd);
+		close(fd);
+
+	if (elk)
+    	free(elk);
+
+	if (value)
+		free(value);
+
     return rv;
 }
 
@@ -176,7 +199,11 @@ out:
 int etcdlock_release(int sock, int pid, char *volume)
 {
 	struct etcdlock *elk;
-    int fd, rv, i, data2, datalen;
+    int fd, rv, data2, datalen;
+
+	elk = malloc(sizeof(struct etcdlock));
+	if (!elk)
+        return -ENOMEM;
 
 	if (sock == -1) {
 		/* connect to daemon and ask it to acquire a lease for
@@ -185,8 +212,10 @@ int etcdlock_release(int sock, int pid, char *volume)
 		data2 = pid;
 
 		rv = connect_socket(&fd);
-		if (rv < 0)
-			return rv;
+		if (rv < 0){
+			rv = -1;
+			goto out;
+		}
 	} else {
 		/* use our own existing registered connection and ask daemon
 		   to acquire a lease for self */
@@ -199,10 +228,12 @@ int etcdlock_release(int sock, int pid, char *volume)
     elk->key = volume;
 
 	rv = send_header(fd, EM_CMD_RELEASE, datalen, data2);
-	if (rv < 0)
+	if (rv < 0){
+		rv = -1;
 		goto out;
+	}
 
-	rv = send_data(fd, &elk, sizeof(struct etcdlock), 0);
+	rv = send_data(fd, elk, sizeof(struct etcdlock), 0);
 	if (rv < 0) {
 		rv = -1;
 		goto out;
@@ -212,5 +243,9 @@ int etcdlock_release(int sock, int pid, char *volume)
  out:
 	if (sock == -1)
 		close(fd);
+
+	if (elk)
+		free(elk);
+
 	return rv;
 }

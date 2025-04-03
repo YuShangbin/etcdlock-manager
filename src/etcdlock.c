@@ -19,9 +19,12 @@
 
 #include "etcdlock_manager_internal.h"
 #include "etcdlock_manager_rv.h"
-#include "libvirt_sanlock_helper.h"
+#include "libvirt_helper.h"
 #include "monotime.h"
 #include "list.h"
+#include "etcdlock.h"
+#include "timeouts.h"
+#include "watchdog.h"
 
 
 #define BASE_URL "http://localhost:8080"
@@ -102,7 +105,7 @@ static int acquire_lock(const char *key, const char *value) {
 }
 
 // 释放锁
-static int release_lock(const char *key) {
+int release_lock(const char *key) {
     CURL *curl;
     CURLcode res;
     char url[MAX_URL_LENGTH];
@@ -280,14 +283,20 @@ void *lock_thread(void *arg_in)
          * log the results
          */
         if (etcdlock_result != ETCDLOCK_OK) {
-            log_erros(elk, "keepalive error %d etcdlock_length %d last_success %llu",
+            /*log_erros(elk, "keepalive error %d etcdlock_length %d last_success %llu",
+                etcdlock_result, etcdlock_length, (unsigned long long)last_success);*/
+            fprintf(stderr, "keepalive error %d etcdlock_length %d last_success %llu\n",
                 etcdlock_result, etcdlock_length, (unsigned long long)last_success);
         } else if (etcdlock_length > keepalive_interval_seconds) {
-            log_erros(elk, "keepalive %llu etcdlock_length %d too long",
+            /*log_erros(elk, "keepalive %llu etcdlock_length %d too long",
+                (unsigned long long)last_success, etcdlock_length);*/
+            fprintf(stderr, "keepalive %llu etcdlock_length %d too long\n",
                 (unsigned long long)last_success, etcdlock_length);
         } else {
             if (com.debug_keepalive) {
-                log_etcdlock(elk, "keepalive %llu etcdlock_length %d interval %d",
+                /*log_etcdlock(elk, "keepalive %llu etcdlock_length %d interval %d",
+                    (unsigned long long)last_success, etcdlock_length, keepalive_interval);*/
+                fprintf(stdin, "keepalive %llu etcdlock_length %d interval %d\n",
                     (unsigned long long)last_success, etcdlock_length, keepalive_interval);
             }
         }
@@ -298,8 +307,7 @@ void *lock_thread(void *arg_in)
  
     disconnect_watchdog(elk);
 
-    if (etcdlock_result == ETCDLOCK_OK)
-        release_lock(elk->key);
+    release_lock(elk->key);
  
     return NULL;
 }
@@ -307,7 +315,7 @@ void *lock_thread(void *arg_in)
 int acquire_lock_start(struct etcdlock *elk)
 {
     uint64_t etcdlock_begin, last_success = 0;
-    int rv, etcdlock_length;
+    int rv;
     int acquire_result, etcdlock_result;
     int keepalive_fail_timeout_seconds;
     int wd_con;
@@ -319,7 +327,8 @@ int acquire_lock_start(struct etcdlock *elk)
     /* Connect first so we can fail quickly if wdmd is not running. */
     wd_con = connect_watchdog(elk);
     if (wd_con < 0) {
-        log_erros(elk, "connect_watchdog failed %d", wd_con);
+        /*log_erros(elk, "connect_watchdog failed %d", wd_con);*/
+        fprintf(stderr, "connect_watchdog failed %d\n", wd_con);
         acquire_result = ETCDLOCK_WD_ERROR;
         etcdlock_result = -1;
         goto set_status;
@@ -338,7 +347,9 @@ int acquire_lock_start(struct etcdlock *elk)
      */
     rv = open_watchdog(wd_con, com.watchdog_fire_timeout);
     if (rv < 0) {
-        log_erros(elk, "open_watchdog with fire_timeout %d failed %d",
+        /*log_erros(elk, "open_watchdog with fire_timeout %d failed %d",
+                  com.watchdog_fire_timeout, wd_con);*/
+        fprintf(stderr, "open_watchdog with fire_timeout %d failed %d\n",
                   com.watchdog_fire_timeout, wd_con);
         acquire_result = ETCDLOCK_WD_ERROR;
         etcdlock_result = -1;
@@ -352,7 +363,6 @@ int acquire_lock_start(struct etcdlock *elk)
     etcdlock_begin = monotime();
  
     etcdlock_result = acquire_lock(elk->key, elk->value);
-    etcdlock_length = monotime() - etcdlock_begin;
  
     if (etcdlock_result == ETCDLOCK_OK)
         last_success = monotime();
@@ -364,7 +374,8 @@ int acquire_lock_start(struct etcdlock *elk)
     if (etcdlock_result == ETCDLOCK_OK) {
         rv = activate_watchdog(elk, last_success, keepalive_fail_timeout_seconds, wd_con);
         if (rv < 0) {
-            log_erros(elk, "activate_watchdog failed %d", rv);
+            /*log_erros(elk, "activate_watchdog failed %d", rv);*/
+            fprintf(stderr, "activate_watchdog failed %d\n", rv);
             acquire_result = ETCDLOCK_WD_ERROR;
         }
     } else {
@@ -390,7 +401,8 @@ set_status:
     if (acquire_result == ETCDLOCK_OK) {
         rv = pthread_create(&elk->thread, NULL, lock_thread, elk);
         if (rv) {
-            log_erros(elk, "acquire lock create keepalive thread failed %d", rv);
+            /*log_erros(elk, "acquire lock create keepalive thread failed %d", rv);*/
+            fprintf(stderr, "acquire lock create keepalive thread failed %d\n", rv);
             acquire_result = -1;
             goto do_fail;
         }
@@ -400,7 +412,8 @@ set_status:
         list_add(&elk->list, &etcdlocks);
         pthread_mutex_unlock(&etcdlocks_mutex);
 
-        log_etcdlock(elk, "acquire lock and create keepalive thread success");
+        /*log_etcdlock(elk, "acquire lock and create keepalive thread success");*/
+        fprintf(stdin, "acquire lock and create keepalive thread success\n");
         return 0;
     }
 do_fail:
@@ -436,12 +449,15 @@ int check_etcdlock_lease(struct etcdlock *elk)
     keepalive_warn_timeout_seconds = calc_keepalive_warn_timeout_seconds(elk->base_timeout);
  
     if (gap >= keepalive_fail_timeout_seconds) {
-        log_erros(elk, "check_etcdlock_lease failed %d", gap);
+        /*log_erros(elk, "check_etcdlock_lease failed %d", gap);*/
+        fprintf(stderr, "check_etcdlock_lease failed %d\n", gap);
         return -1;
     }
  
     if (gap >= keepalive_warn_timeout_seconds) {
-        log_erros(elk, "check_etcdlock_lease warning %d last_success %llu",
+        /*log_erros(elk, "check_etcdlock_lease warning %d last_success %llu",
+            gap, (unsigned long long)last_success);*/
+        fprintf(stderr, "check_etcdlock_lease warning %d last_success %llu\n",
             gap, (unsigned long long)last_success);
     }
  
