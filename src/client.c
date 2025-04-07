@@ -125,7 +125,7 @@ retry:
 	return (int)h.data;
 }
 
-int etcdlock_acquire(int sock, char *volume, int vm_pid, char *vm_uri, char *vm_uuid)
+int etcdlock_acquire(int sock, char *volume, int vm_pid, char *killpath, char *killargs)
 {
     struct etcdlock *elk;
     int rv, fd, data2;
@@ -144,8 +144,12 @@ int etcdlock_acquire(int sock, char *volume, int vm_pid, char *vm_uri, char *vm_
 	}
     elk->key = volume;
     elk->value = value;
-    elk->vm_uri = vm_uri;
-    elk->vm_uuid = vm_uuid;
+	memset(elk->killpath, 0, HELPER_PATH_LEN);
+	memset(elk->killargs, 0, HELPER_ARGS_LEN);
+    memcpy(elk->killpath, killpath, HELPER_PATH_LEN-1);
+	elk->killpath[HELPER_PATH_LEN-1] = '\0';
+	memcpy(elk->killargs, killargs, HELPER_ARGS_LEN-1);
+	elk->killargs[HELPER_ARGS_LEN-1] = '\0';
 
     if (sock == -1) {
         /* connect to daemon and ask it to acquire a lease for

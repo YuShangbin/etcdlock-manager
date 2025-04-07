@@ -272,8 +272,8 @@ static void print_usage(void)
 	printf("  -h 0|1        use high priority (RR) scheduling (%d)\n", DEFAULT_HIGH_PRIORITY);
 	printf("  -l <num>      use mlockall (0 none, 1 current, 2 current and future) (%d)\n", DEFAULT_MLOCK_LEVEL);
 	printf("\n");
-	printf("etcdlock_manager client acquire -volume <volume> -pid <vm_pid> -uri <vm_uri> -uuid <vm_uuid>\n");
-	printf("etcdlock_manager client release -volume <volume> -pid <vm_pid>\n");
+	printf("etcdlock_manager client acquire -v <volume> -p <vm_pid> -r <killpath> -i <killargs>\n");
+	printf("etcdlock_manager client release -v <volume> -p <vm_pid>\n");
 	printf("Limits:\n");
 	printf("maximum client process connections: 1000\n"); /* NALLOC */
 	printf("\n");
@@ -424,11 +424,11 @@ static int read_command_line(int argc, char *argv[])
 		    break;
 		
 		case 'r':
-		    com.vm_uri = strdup(optionarg);
+		    com.killpath = strdup(optionarg);
 		    break;
 
 		case 'i':
-		    com.vm_uuid = strdup(optionarg);
+		    com.killargs = strdup(optionarg);
 		    break;
 
 		default:
@@ -1884,7 +1884,7 @@ static int do_client(void)
 			fprintf(stdin, "acquire client_id %d\n", com.cid);
 			id = com.cid;
 		}
-		rv = etcdlock_acquire(-1, com.volume, com.vm_pid, com.vm_uri, com.vm_uuid);
+		rv = etcdlock_acquire(-1, com.volume, com.vm_pid, com.killpath, com.killargs);
 		/*log_tool("acquire done %d", rv);*/
 		fprintf(stdin, "acquire done %d\n", rv);
 		break;

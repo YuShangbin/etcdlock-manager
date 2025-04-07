@@ -105,8 +105,8 @@ struct command_line {
 	int keepalive_history_size;
 	char *volume;
 	int vm_pid;				/* -pid */
-	char *vm_uri;
-	char *vm_uuid;
+	char *killpath;
+	char *killargs;
 };
 
 EXTERN struct command_line com;
@@ -134,8 +134,6 @@ struct etcdlock {
 	struct list_head list;
 	char *key;
 	char *value;
-	char *vm_uri;
-	char *vm_uuid;
 	uint32_t base_timeout;
 	struct keepalive_history *keepalive_history;
 	int keepalive_history_size;
@@ -149,6 +147,8 @@ struct etcdlock {
 	int killing_pid;
 	int keepalive_fail;
 	int wd_fd;
+	char killpath[HELPER_PATH_LEN];
+	char killargs[HELPER_ARGS_LEN];
 };
 
 struct keepalive_history {

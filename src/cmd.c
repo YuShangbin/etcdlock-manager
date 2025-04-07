@@ -32,6 +32,7 @@
 #include "cmd.h"
 #include "etcdlock.h"
 
+
 void client_resume(int ci);
 void client_free(int ci);
 void client_pid_dead(int ci);
@@ -78,10 +79,6 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 		goto done;
 	}
 
-	/* TODO: get acquire params from client*/
-	
-	pthread_mutex_unlock(&cl->mutex);
-
 	/*
 	 * receive etcdlock params, acquire lock
 	 */
@@ -95,6 +92,16 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 		result = -ENOTCONN;
 		goto done;
 	}
+
+	/* Add client killpath and killargs, and set it to elk client */
+	memcpy(cl->killpath, elk.killpath, HELPER_PATH_LEN-1);
+	cl->killpath[HELPER_PATH_LEN-1] = '\0';
+	memcpy(cl->killargs, elk.killargs, HELPER_ARGS_LEN-1);
+	cl->killargs[HELPER_ARGS_LEN-1] = '\0';
+
+	elk.client = cl;
+	
+	pthread_mutex_unlock(&cl->mutex);
 
 	rv = acquire_lock_start(&elk);
 	if (rv < 0) {

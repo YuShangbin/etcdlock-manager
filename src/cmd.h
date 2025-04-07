@@ -4,7 +4,7 @@
 #define __CMD_H__
 
 #include "list.h"
-#include "etcdlock_manager_sock.h"	
+#include "etcdlock_manager_sock.h"
 
 struct cmd_args {
 	struct list_head list; /* thread_pool data */
