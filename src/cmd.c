@@ -93,6 +93,9 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 		goto done;
 	}
 
+	fprintf(stderr, "cmd_acquire recv elk finish.\n");
+	fprintf(stderr, "cmd_acquire elk value: %s\n", elk.value);
+
 	/* Add client killpath and killargs, and set it to elk client */
 	memcpy(cl->killpath, elk.killpath, HELPER_PATH_LEN-1);
 	cl->killpath[HELPER_PATH_LEN-1] = '\0';
@@ -169,6 +172,7 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	/* 3. Failure acquiring leases, and pid is live */
 
 	if (result && !pid_dead) {
+		fprintf(stderr, "cmd_acquire, elk.key: %s", elk.key);
 		release_lock(elk.key);
 		goto reply;
 	}
@@ -187,7 +191,7 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	fprintf(stdin, "cmd_acquire %d,%d,%d result %d\n",
 		  cl_ci, cl_fd, cl_pid, result);
 	send_result(ca->ci_in, fd, &ca->header, result);
-	client_resume(ca->ci_in);
+	//client_resume(ca->ci_in);
 }
 
 static void cmd_release(struct cmd_args *ca, uint32_t cmd)

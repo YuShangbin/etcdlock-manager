@@ -1167,10 +1167,14 @@ static void process_cmd_thread_registered(int ci_in, struct em_header *h_recv)
 		/* lease for another registered client with pid or client_id specified by data2 */
  
 		for_pid = h_recv->data2;
+
+                fprintf(stderr, "for_pid: %d\n", for_pid);
  
-		for (i = 0; i < client_size; i++) {
+		/*for (i = 0; i < client_size; i++) {
 			cl = &client[i];
 			pthread_mutex_lock(&cl->mutex);
+
+			fprintf(stderr, "client pid: %d\n", cl->pid);
  
 			if (for_pid > -1) {
 				if (cl->pid != for_pid) {
@@ -1186,8 +1190,14 @@ static void process_cmd_thread_registered(int ci_in, struct em_header *h_recv)
  
 			ci_target = i;
 			break;
-		}
- 
+		}*/
+                ci_target = ci_in;
+                
+		fprintf(stderr, "ci_target: %d\n", ci_target);
+
+		client[ci_target].pid = for_pid;
+
+		cl = &client[ci_target];
 		/*log_client(ci_in, client[ci_in].fd, "process reg cmd %u for target ci %d pid %d",
 			h_recv->cmd, ci_target, client[ci_target].pid);*/
 		fprintf(stderr, "process reg cmd %u for target ci %d pid %d",
@@ -1282,11 +1292,8 @@ out:
 		cl->cmd_active = 0;
 		pthread_mutex_unlock(&cl->mutex);
 		result = rv;
-		free(cl);
 		goto fail;
 	}
-
-	free(cl);
 	return;
  
 fail:
@@ -1439,6 +1446,8 @@ static void send_helper_kill(struct etcdlock *elk, struct client *cl, int sig)
 	struct helper_msg hm;
 	int rv;
 
+	fprintf(stderr, "send_helper_kill begin.\n");
+
 	/*
 	 * We come through here once a second while the pid still has
 	 * leases.  We only send a single RUNPATH message, so after
@@ -1453,6 +1462,8 @@ static void send_helper_kill(struct etcdlock *elk, struct client *cl, int sig)
 		fprintf(stderr, "send_helper_kill pid %d no fd", cl->pid);
 		return;
 	}
+
+	fprintf(stderr, "send_helper_kill construct helper msg.\n");
 
 	memset(&hm, 0, sizeof(hm));
 
@@ -1471,10 +1482,11 @@ static void send_helper_kill(struct etcdlock *elk, struct client *cl, int sig)
 	}
 
 	/*log_erros(elk, "kill %d sig %d count %d", cl->pid, sig, cl->kill_count);*/
-	fprintf(stdin, "kill %d sig %d count %d\n", cl->pid, sig, cl->kill_count);
+	fprintf(stderr, "send_helper_kill kill %d sig %d count %d\n", cl->pid, sig, cl->kill_count);
 
  retry:
 	rv = write(helper_kill_fd, &hm, sizeof(hm));
+	fprintf(stderr, "send_helper_kill send result: %d\n", rv);
 	if (rv == -1 && errno == EINTR)
 		goto retry;
 
@@ -1483,7 +1495,7 @@ static void send_helper_kill(struct etcdlock *elk, struct client *cl, int sig)
 		helper_full_count++;
 		/*log_etcdlock(elk, "send_helper_kill pid %d sig %d full_count %u",
 			  cl->pid, sig, helper_full_count);*/
-		fprintf(stdin, "send_helper_kill pid %d sig %d full_count %u\n",
+		fprintf(stderr, "send_helper_kill pid %d sig %d full_count %u\n",
 			  cl->pid, sig, helper_full_count);
 		return;
 	}
@@ -1491,7 +1503,7 @@ static void send_helper_kill(struct etcdlock *elk, struct client *cl, int sig)
 	/* helper exited or closed fd, quit using helper */
 	if (rv == -1 && errno == EPIPE) {
 		/*log_erros(elk, "send_helper_kill EPIPE");*/
-		fprintf(stdin, "send_helper_kill EPIPE\n");
+		fprintf(stderr, "send_helper_kill EPIPE\n");
 		close_helper();
 		return;
 	}
@@ -1500,7 +1512,7 @@ static void send_helper_kill(struct etcdlock *elk, struct client *cl, int sig)
 		/* this shouldn't happen */
 		/*log_erros(elk, "send_helper_kill pid %d error %d %d",
 			  cl->pid, rv, errno);*/
-		fprintf(stdin, "send_helper_kill pid %d error %d %d\n",
+		fprintf(stderr, "send_helper_kill pid %d error %d %d\n",
 			  cl->pid, rv, errno);
 		close_helper();
 		return;
@@ -1517,6 +1529,8 @@ static void kill_pid(struct etcdlock *elk)
 	int keepalive_fail_timeout_seconds;
 	int sig;
 	int do_kill = 0, in_grace;
+
+	fprintf(stderr, "kill_pid begin.\n");
 
 	/*
 	 * remaining pid using elk is stuck, we've made max attempts to
@@ -1543,17 +1557,25 @@ static void kill_pid(struct etcdlock *elk)
 
     pthread_mutex_lock(&cl->mutex);
 
-	if (!cl->used)
+	if (!cl->used){
+		fprintf(stderr, "kill_pid client not used.\n");
 		goto unlock;
+	}
 
-	if (cl->pid <= 0)
+	if (cl->pid <= 0){
+		fprintf(stderr, "kill_pid client no pid.\n");
 		goto unlock;
+	}
 
-	if (cl->kill_count >= kill_count_max)
+	if (cl->kill_count >= kill_count_max){
+		fprintf(stderr, "kill_pid kill count exceed.\n");
 		goto unlock;
+	}
 
-	if (cl->kill_count && (now - cl->kill_last < 1))
+	if (cl->kill_count && (now - cl->kill_last < 1)){
+		fprintf(stderr, "kill_pid kill too frequently.\n");
 		goto unlock;
+	}
 
 	cl->kill_last = now;
 	cl->kill_count++;
@@ -1565,6 +1587,11 @@ static void kill_pid(struct etcdlock *elk)
 	 * keepalive_fail_timeout_seconds +
 	 * kill_grace_seconds
 	 */
+
+	com.kill_grace_seconds = 4;
+	fprintf(stderr, "kill_pid kill_grace_seconds: %d\n", com.kill_grace_seconds);
+	fprintf(stderr, "kill_pid now: %ld\n", now);
+	fprintf(stderr, "kill_pid grace time: %ld\n", last_success + keepalive_fail_timeout_seconds + com.kill_grace_seconds);
 
 	in_grace = now < (last_success + keepalive_fail_timeout_seconds + com.kill_grace_seconds);
 
@@ -1578,6 +1605,8 @@ static void kill_pid(struct etcdlock *elk)
 
 	do_kill = 1;
 unlock:
+	fprintf(stderr, "kill_pid do_kill: %d\n", do_kill);
+	fprintf(stderr, "kill_pid sig: %d\n", sig);
 	pthread_mutex_unlock(&cl->mutex);
 
 	if (!do_kill)
@@ -1920,11 +1949,14 @@ int main(int argc, char *argv[])
 	BUILD_BUG_ON(sizeof(struct helper_msg) != HELPER_MSG_LEN);
 
 	/* initialize global EXTERN variables */
-    kill_count_max = DEFAULT_KILL_COUNT_MAX;
+        kill_count_max = DEFAULT_KILL_COUNT_MAX;
 	helper_ci = -1;
 	helper_pid = -1;
 	helper_kill_fd = -1;
 	helper_status_fd = -1;
+
+	pthread_mutex_init(&etcdlocks_mutex, NULL);
+	INIT_LIST_HEAD(&etcdlocks);
 
 	memset(&com, 0, sizeof(com));
 	com.use_watchdog = DEFAULT_USE_WATCHDOG;

@@ -130,10 +130,13 @@ struct lease_status {
 	uint64_t keepalive_last_success;
 };
 
+#define ETCDLOCK_KEY_LEN 40
+#define ETCDLOCK_VALUE_LEN 10
+
 struct etcdlock {
 	struct list_head list;
-	char *key;
-	char *value;
+	char key[ETCDLOCK_KEY_LEN];
+	char value[ETCDLOCK_VALUE_LEN];
 	uint32_t base_timeout;
 	struct keepalive_history *keepalive_history;
 	int keepalive_history_size;

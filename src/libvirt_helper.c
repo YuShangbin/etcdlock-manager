@@ -30,6 +30,8 @@ static void run_path(struct helper_msg *hm)
 	int av_count = 0;
 	int i, arg_len, args_len;
 
+	fprintf(stderr, "run_path begin.\n");
+
 	for (i = 0; i < MAX_AV_COUNT + 1; i++)
 		av[i] = NULL;
 
@@ -92,6 +94,8 @@ static void run_path(struct helper_msg *hm)
 		snprintf(arg, sizeof(arg)-1, "%d", hm->pid);
 		av[av_count++] = strdup(arg);
 	}
+
+	fprintf(stderr, "run_path begin to exec killpath.\n");
 
 	execvp(av[0], av);
 }
@@ -193,6 +197,7 @@ int run_helper(int in_fd, int out_fd, int log_stderr)
 			hm.args[HELPER_ARGS_LEN-1] = '\0';
 
 			if (hm.type == HELPER_MSG_RUNPATH) {
+				fprintf(stderr, "run_helper recv runpath.\n");
 				pid = fork();
 				if (!pid) {
 					run_path(&hm);
@@ -205,6 +210,7 @@ int run_helper(int in_fd, int out_fd, int log_stderr)
 					  pid, fork_count, wait_count,
 					  hm.path, hm.args);
 			} else if (hm.type == HELPER_MSG_KILLPID) {
+				fprintf(stderr, "run_helper recv kill pid.\n");
 				kill(hm.pid, hm.sig);
 
 			}

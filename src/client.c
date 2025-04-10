@@ -138,18 +138,30 @@ int etcdlock_acquire(int sock, char *volume, int vm_pid, char *killpath, char *k
         return -ENOMEM;
 
     datalen += sizeof(struct etcdlock);
-	value = malloc(128 * sizeof(char));
-	if (value){
-		snprintf(value, 128, "%d", vm_pid);
-	}
-    elk->key = volume;
-    elk->value = value;
-	memset(elk->killpath, 0, HELPER_PATH_LEN);
-	memset(elk->killargs, 0, HELPER_ARGS_LEN);
+
+    fprintf(stderr, "etcdlock_acquire vm_pid: %d\n", vm_pid);
+
+    snprintf(elk->value, ETCDLOCK_VALUE_LEN, "%d", vm_pid);
+
+    fprintf(stderr, "etcdlock_acquire volume: %s\n", volume);
+    fprintf(stderr, "etcdlock_acquire elk->value: %s\n", elk->value);
+    
+    memset(elk->key, 0, ETCDLOCK_KEY_LEN);
+    memcpy(elk->key, volume, ETCDLOCK_KEY_LEN-1);
+    elk->key[ETCDLOCK_KEY_LEN-1] = '\0';
+
+    fprintf(stderr, "etcdlock_acquire elk->key: %s\n", elk->key);
+
+    memset(elk->killpath, 0, HELPER_PATH_LEN);
+    memset(elk->killargs, 0, HELPER_ARGS_LEN);
     memcpy(elk->killpath, killpath, HELPER_PATH_LEN-1);
-	elk->killpath[HELPER_PATH_LEN-1] = '\0';
-	memcpy(elk->killargs, killargs, HELPER_ARGS_LEN-1);
-	elk->killargs[HELPER_ARGS_LEN-1] = '\0';
+    elk->killpath[HELPER_PATH_LEN-1] = '\0';
+    memcpy(elk->killargs, killargs, HELPER_ARGS_LEN-1);
+    elk->killargs[HELPER_ARGS_LEN-1] = '\0';
+
+    /* Add base timeout */
+    //elk->base_timeout = com.base_timeout;
+    elk->base_timeout = 1;
 
     if (sock == -1) {
         /* connect to daemon and ask it to acquire a lease for
@@ -229,7 +241,12 @@ int etcdlock_release(int sock, int pid, char *volume)
 	}
 
 	datalen = sizeof(struct etcdlock);
-    elk->key = volume;
+
+        memset(elk->key, 0, ETCDLOCK_KEY_LEN);
+        memcpy(elk->key, volume, ETCDLOCK_KEY_LEN-1);
+        elk->key[ETCDLOCK_KEY_LEN-1] = '\0';
+
+	fprintf(stderr, "etcdlock_acquire elk->key: %s\n", elk->key);
 
 	rv = send_header(fd, EM_CMD_RELEASE, datalen, data2);
 	if (rv < 0){

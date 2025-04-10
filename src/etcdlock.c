@@ -117,6 +117,7 @@ int release_lock(const char *key) {
         return -1;
     }
 
+    fprintf(stderr, "release_lock key: %s", key);
     snprintf(url, sizeof(url), "%s/unlock/%s", BASE_URL, key);
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -224,9 +225,12 @@ void *lock_thread(void *arg_in)
     keepalive_interval_seconds = calc_keepalive_interval_seconds(elk->base_timeout);
     keepalive_fail_timeout_seconds = calc_keepalive_fail_timeout_seconds(elk->base_timeout);
 
+    fprintf(stderr, "lock_thread begin.\n");
+
     while (1) {
         pthread_mutex_lock(&elk->mutex);
         stop = elk->thread_stop;
+	fprintf(stderr, "lock_thread stop: %d\n", stop);
         pthread_mutex_unlock(&elk->mutex);
         if (stop)
             break;
@@ -234,6 +238,8 @@ void *lock_thread(void *arg_in)
         /*
         * wait between each keepalive
         */
+	last_success = elk->lease_status.keepalive_last_success;
+        fprintf(stderr, "lock_thread last_success: %ld\n", last_success);
         if (monotime() - last_success < keepalive_interval_seconds) {
             sleep(1);
             continue;
@@ -278,6 +284,9 @@ void *lock_thread(void *arg_in)
  
         save_keepalive_history(elk, etcdlock_result, last_success);
         pthread_mutex_unlock(&elk->mutex);
+
+	fprintf(stderr, "lock_thread keepalive_interval_seconds: %d\n", keepalive_interval_seconds);
+	fprintf(stderr, "lock_thread keepalive_fail_timeout_seconds: %d\n", keepalive_fail_timeout_seconds);
  
         /*
          * log the results
@@ -322,17 +331,17 @@ int acquire_lock_start(struct etcdlock *elk)
 
     keepalive_fail_timeout_seconds = calc_keepalive_fail_timeout_seconds(elk->base_timeout);
 
-    etcdlock_begin = monotime();
+    //etcdlock_begin = monotime();
  
     /* Connect first so we can fail quickly if wdmd is not running. */
-    wd_con = connect_watchdog(elk);
-    if (wd_con < 0) {
+    //wd_con = connect_watchdog(elk);
+    //if (wd_con < 0) {
         /*log_erros(elk, "connect_watchdog failed %d", wd_con);*/
-        fprintf(stderr, "connect_watchdog failed %d\n", wd_con);
-        acquire_result = ETCDLOCK_WD_ERROR;
-        etcdlock_result = -1;
-        goto set_status;
-    }
+    //    fprintf(stderr, "connect_watchdog failed %d\n", wd_con);
+    //    acquire_result = ETCDLOCK_WD_ERROR;
+    //    etcdlock_result = -1;
+    //    goto set_status;
+    //}
  
     /*
      * Tell wdmd to open the watchdog device, set the fire timeout and
@@ -345,17 +354,17 @@ int acquire_lock_start(struct etcdlock *elk)
      * open, this does nothing (just verifies that fire timeout matches
      * what's in use.)
      */
-    rv = open_watchdog(wd_con, com.watchdog_fire_timeout);
-    if (rv < 0) {
+    //rv = open_watchdog(wd_con, com.watchdog_fire_timeout);
+    //if (rv < 0) {
         /*log_erros(elk, "open_watchdog with fire_timeout %d failed %d",
                   com.watchdog_fire_timeout, wd_con);*/
-        fprintf(stderr, "open_watchdog with fire_timeout %d failed %d\n",
-                  com.watchdog_fire_timeout, wd_con);
-        acquire_result = ETCDLOCK_WD_ERROR;
-        etcdlock_result = -1;
-        disconnect_watchdog(elk);
-        goto set_status;
-    }
+    //    fprintf(stderr, "open_watchdog with fire_timeout %d failed %d\n",
+    //              com.watchdog_fire_timeout, wd_con);
+    //    acquire_result = ETCDLOCK_WD_ERROR;
+    //    etcdlock_result = -1;
+    //    disconnect_watchdog(elk);
+    //    goto set_status;
+    //}
  
     /*
      * acquire the etcd lock
@@ -371,19 +380,19 @@ int acquire_lock_start(struct etcdlock *elk)
  
     /* we need to start the watchdog after we acquire the etcd lock but
         before we allow any pid's to begin running */
-    if (etcdlock_result == ETCDLOCK_OK) {
-        rv = activate_watchdog(elk, last_success, keepalive_fail_timeout_seconds, wd_con);
-        if (rv < 0) {
+    //if (etcdlock_result == ETCDLOCK_OK) {
+    //    rv = activate_watchdog(elk, last_success, keepalive_fail_timeout_seconds, wd_con);
+    //    if (rv < 0) {
             /*log_erros(elk, "activate_watchdog failed %d", rv);*/
-            fprintf(stderr, "activate_watchdog failed %d\n", rv);
-            acquire_result = ETCDLOCK_WD_ERROR;
-        }
-    } else {
-        if (com.use_watchdog)
-            close(wd_con);
-    }
+    //        fprintf(stderr, "activate_watchdog failed %d\n", rv);
+    //        acquire_result = ETCDLOCK_WD_ERROR;
+    //    }
+    //} else {
+    //    if (com.use_watchdog)
+    //        close(wd_con);
+    //}
  
-set_status:
+//set_status:
     pthread_mutex_lock(&elk->mutex);
     elk->lease_status.acquire_last_result = acquire_result;
     elk->lease_status.acquire_last_attempt = etcdlock_begin;
@@ -399,6 +408,9 @@ set_status:
 
     /* If acquire lock successful, start the keepalive thread */
     if (acquire_result == ETCDLOCK_OK) {
+	pthread_mutex_lock(&elk->mutex);
+	elk->thread_stop = 0;
+	pthread_mutex_unlock(&elk->mutex);
         rv = pthread_create(&elk->thread, NULL, lock_thread, elk);
         if (rv) {
             /*log_erros(elk, "acquire lock create keepalive thread failed %d", rv);*/
@@ -407,10 +419,14 @@ set_status:
             goto do_fail;
         }
 
+	fprintf(stderr, "acquire_lock_start create keepalive thread success.\n");
+
         /* Add elk to etcdlocks list for main loop to check the lock lease */
         pthread_mutex_lock(&etcdlocks_mutex);
         list_add(&elk->list, &etcdlocks);
         pthread_mutex_unlock(&etcdlocks_mutex);
+
+        fprintf(stderr, "acquire_lock_start add elk to list success.\n");
 
         /*log_etcdlock(elk, "acquire lock and create keepalive thread success");*/
         fprintf(stdin, "acquire lock and create keepalive thread success\n");
@@ -419,13 +435,9 @@ set_status:
 do_fail:
     if (etcdlock_result == ETCDLOCK_OK){
         release_lock(elk->key);
-        if (com.use_watchdog)
-            close(wd_con);
+        //if (com.use_watchdog)
+        //    close(wd_con);
     }
-
-    pthread_mutex_lock(&etcdlocks_mutex);
-    list_del(&elk->list);
-    pthread_mutex_unlock(&etcdlocks_mutex);
 
     return acquire_result;
 }
@@ -460,6 +472,8 @@ int check_etcdlock_lease(struct etcdlock *elk)
         fprintf(stderr, "check_etcdlock_lease warning %d last_success %llu\n",
             gap, (unsigned long long)last_success);
     }
+
+    fprintf(stderr, "check_etcdlock_lease success.\n");
  
     return 0;
 }
