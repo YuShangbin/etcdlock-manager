@@ -246,7 +246,7 @@ int etcdlock_release(int sock, int pid, char *volume)
         memcpy(elk->key, volume, ETCDLOCK_KEY_LEN-1);
         elk->key[ETCDLOCK_KEY_LEN-1] = '\0';
 
-	fprintf(stderr, "etcdlock_acquire elk->key: %s\n", elk->key);
+	fprintf(stderr, "etcdlock_release elk->key: %s\n", elk->key);
 
 	rv = send_header(fd, EM_CMD_RELEASE, datalen, data2);
 	if (rv < 0){

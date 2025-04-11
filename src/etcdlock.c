@@ -117,7 +117,7 @@ int release_lock(const char *key) {
         return -1;
     }
 
-    fprintf(stderr, "release_lock key: %s", key);
+    fprintf(stderr, "release_lock key: %s\n", key);
     snprintf(url, sizeof(url), "%s/unlock/%s", BASE_URL, key);
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -429,7 +429,7 @@ int acquire_lock_start(struct etcdlock *elk)
         fprintf(stderr, "acquire_lock_start add elk to list success.\n");
 
         /*log_etcdlock(elk, "acquire lock and create keepalive thread success");*/
-        fprintf(stdin, "acquire lock and create keepalive thread success\n");
+        fprintf(stderr, "acquire lock and create keepalive thread success\n");
         return 0;
     }
 do_fail:

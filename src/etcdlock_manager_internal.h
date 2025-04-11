@@ -147,6 +147,7 @@ struct etcdlock {
 	struct lease_status lease_status;
 	pthread_t thread;
 	struct client *client;
+	int client_ci;
 	int killing_pid;
 	int keepalive_fail;
 	int wd_fd;

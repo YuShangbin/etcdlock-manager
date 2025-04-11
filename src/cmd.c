@@ -103,6 +103,7 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	cl->killargs[HELPER_ARGS_LEN-1] = '\0';
 
 	elk.client = cl;
+	elk.client_ci = cl_ci;
 	
 	pthread_mutex_unlock(&cl->mutex);
 
@@ -172,7 +173,7 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	/* 3. Failure acquiring leases, and pid is live */
 
 	if (result && !pid_dead) {
-		fprintf(stderr, "cmd_acquire, elk.key: %s", elk.key);
+		fprintf(stderr, "cmd_acquire, elk.key: %s\n", elk.key);
 		release_lock(elk.key);
 		goto reply;
 	}
@@ -252,7 +253,8 @@ out:
 
 	/* delete elk from etcdlocks list */
 	pthread_mutex_lock(&etcdlocks_mutex);
-    list_del(&elk.list);
+	if (!list_empty(&etcdlocks))
+        	list_del(&elk.list);
 	pthread_mutex_unlock(&etcdlocks_mutex);
 
 	send_result(ca->ci_in, fd, &ca->header, result);
