@@ -31,6 +31,7 @@
 #include "etcdlock_manager_sock.h"
 #include "cmd.h"
 #include "etcdlock.h"
+#include "client.h"
 
 
 void client_resume(int ci);
@@ -56,13 +57,14 @@ static ssize_t recv_loop(int sockfd, void *buf, size_t len, int flags)
 static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 {
 	struct client *cl;
-	struct etcdlock elk;
-	int fd, rv;
+	struct etcdlock elk[ETCDLK_MAX_RESOURCES];
+	int fd, rv, i;
 	int pid_dead = 0;
 	int result = 0;
 	int cl_ci = ca->ci_target;
 	int cl_fd = ca->cl_fd;
 	int cl_pid = ca->cl_pid;
+	int etcdlock_count;
 
 	cl = &client[cl_ci];
 	fd = client[ca->ci_in].fd;
@@ -82,35 +84,42 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	/*
 	 * receive etcdlock params, acquire lock
 	 */
+	etcdlock_count = ca->header.data;
 
-	rv = recv_loop(fd, &elk, sizeof(struct etcdlock), MSG_WAITALL);
-	if (rv != sizeof(struct etcdlock)) {
-		/*log_error("cmd_acquire %d,%d,%d recv elk %d %d",
-				  cl_ci, cl_fd, cl_pid, rv, errno);*/
-		fprintf(stderr, "cmd_acquire %d,%d,%d recv elk %d %d\n",
-			  cl_ci, cl_fd, cl_pid, rv, errno);
-		result = -ENOTCONN;
-		goto done;
+	for (i = 0; i < etcdlock_count; i++) {
+		rv = recv_loop(fd, &elk[i], sizeof(struct etcdlock), MSG_WAITALL);
+        	if (rv != sizeof(struct etcdlock)) {
+                	/*log_error("cmd_acquire %d,%d,%d recv elk %d %d",
+                                  	cl_ci, cl_fd, cl_pid, rv, errno);*/
+                	fprintf(stderr, "cmd_acquire %d,%d,%d recv elk %d %d\n",
+                          	cl_ci, cl_fd, cl_pid, rv, errno);
+                	result = -ENOTCONN;
+                	goto done;
+        	}
+
+        	fprintf(stderr, "cmd_acquire recv elk %d finish.\n", i);
+        	fprintf(stderr, "cmd_acquire elk %d value: %s\n", i, elk[i].value);
+
+        	/* Add client killpath and killargs, and set it to elk client */
+		if (!cl->killpath[0] || !cl->killargs[0]) {
+        		memcpy(cl->killpath, elk[i].killpath, HELPER_PATH_LEN-1);
+        		cl->killpath[HELPER_PATH_LEN-1] = '\0';
+        		memcpy(cl->killargs, elk[i].killargs, HELPER_ARGS_LEN-1);
+        		cl->killargs[HELPER_ARGS_LEN-1] = '\0';
+		}
+
+        	elk[i].client = cl;
+        	elk[i].client_ci = cl_ci;
 	}
 
-	fprintf(stderr, "cmd_acquire recv elk finish.\n");
-	fprintf(stderr, "cmd_acquire elk value: %s\n", elk.value);
-
-	/* Add client killpath and killargs, and set it to elk client */
-	memcpy(cl->killpath, elk.killpath, HELPER_PATH_LEN-1);
-	cl->killpath[HELPER_PATH_LEN-1] = '\0';
-	memcpy(cl->killargs, elk.killargs, HELPER_ARGS_LEN-1);
-	cl->killargs[HELPER_ARGS_LEN-1] = '\0';
-
-	elk.client = cl;
-	elk.client_ci = cl_ci;
-	
 	pthread_mutex_unlock(&cl->mutex);
 
-	rv = acquire_lock_start(&elk);
-	if (rv < 0) {
-		result = rv;
-		goto done;
+        for (i = 0; i < etcdlock_count; i++) {
+		rv = acquire_lock_start(&elk[i]);
+                if (rv < 0) {
+                        result = rv;
+                        goto done;
+                }
 	}
 
 	/*
@@ -145,7 +154,7 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	pthread_mutex_lock(&cl->mutex);
 	/*log_cmd(cmd, "cmd_acquire %d,%d,%d result %d pid_dead %d",
 		  cl_ci, cl_fd, cl_pid, result, cl->pid_dead);*/
-	fprintf(stdin, "cmd_acquire %d,%d,%d result %d pid_dead %d\n",
+	fprintf(stderr, "cmd_acquire %d,%d,%d result %d pid_dead %d\n",
 		  cl_ci, cl_fd, cl_pid, result, cl->pid_dead);
 
 	pid_dead = cl->pid_dead;
@@ -164,7 +173,7 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	/* 2. Success acquiring lock, and pid is dead */
 
 	if (!result && pid_dead) {
-		release_lock(elk.key);
+		release_lock(elk[i].key);
 		client_free(cl_ci);
 		result = -ENOTTY;
 		goto reply;
@@ -173,15 +182,15 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 	/* 3. Failure acquiring leases, and pid is live */
 
 	if (result && !pid_dead) {
-		fprintf(stderr, "cmd_acquire, elk.key: %s\n", elk.key);
-		release_lock(elk.key);
+		fprintf(stderr, "cmd_acquire, elk %d key: %s\n", i, elk[i].key);
+		release_lock(elk[i].key);
 		goto reply;
 	}
 
 	/* 4. Failure acquiring leases, and pid is dead */
 
 	if (result && pid_dead) {
-		release_lock(elk.key);
+		release_lock(elk[i].key);
 		client_free(cl_ci);
 		goto reply;
 	}
@@ -189,7 +198,7 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
  reply:
 	/*log_cmd(cmd, "cmd_acquire %d,%d,%d result %d",
 		  cl_ci, cl_fd, cl_pid, result);*/
-	fprintf(stdin, "cmd_acquire %d,%d,%d result %d\n",
+	fprintf(stderr, "cmd_acquire %d,%d,%d result %d\n",
 		  cl_ci, cl_fd, cl_pid, result);
 	send_result(ca->ci_in, fd, &ca->header, result);
 	//client_resume(ca->ci_in);
@@ -198,12 +207,14 @@ static void cmd_acquire(struct cmd_args *ca, uint32_t cmd)
 static void cmd_release(struct cmd_args *ca, uint32_t cmd)
 {
 	struct client *cl;
-	struct etcdlock elk;
+	struct etcdlock elk[ETCDLK_MAX_RESOURCES];
+	struct etcdlock *elki, *safe;
 	int fd, rv, pid_dead;
 	int result = 0;
 	int cl_ci = ca->ci_target;
 	int cl_fd = ca->cl_fd;
 	int cl_pid = ca->cl_pid;
+	int etcdlock_count, i;
 
 	cl = &client[cl_ci];
 	fd = client[ca->ci_in].fd;
@@ -213,18 +224,36 @@ static void cmd_release(struct cmd_args *ca, uint32_t cmd)
 	fprintf(stdin, "cmd_release %d,%d,%d ci_in %d fd %d\n",
 		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd);
 
-	rv = recv_loop(fd, &elk, sizeof(struct etcdlock), MSG_WAITALL);
-	if (rv != sizeof(struct etcdlock)) {
-    	/*log_error("cmd_release %d,%d,%d recv elk %d %d",
-				  cl_ci, cl_fd, cl_pid, rv, errno);*/
-		fprintf(stderr, "cmd_release %d,%d,%d recv elk %d %d\n",
-				  cl_ci, cl_fd, cl_pid, rv, errno);
-		result = -ENOTCONN;
-		goto out;
+	etcdlock_count = ca->header.data;
+
+	for (i = 0; i < etcdlock_count; i++) {
+		rv = recv_loop(fd, &elk[i], sizeof(struct etcdlock), MSG_WAITALL);
+        	if (rv != sizeof(struct etcdlock)) {
+        		/*log_error("cmd_release %d,%d,%d recv elk %d %d",
+                                  		cl_ci, cl_fd, cl_pid, rv, errno);*/
+                	fprintf(stderr, "cmd_release %d,%d,%d recv elk %d %d\n",
+                                  	cl_ci, cl_fd, cl_pid, rv, errno);
+                	result = -ENOTCONN;
+                	goto out;
+        	}
 	}
 
-	result = release_lock(elk.key);
+	for (i = 0; i < etcdlock_count; i++) {
+        	result = release_lock(elk[i].key);
+		if (result < 0) {
+			goto out;
+		}
 
+		/* find the etcdlock in etcdlocks which has been release, set lock thread
+		 * to stop and remove it from etcdlocks */
+		list_for_each_entry_safe(elki, safe, &etcdlocks, list) {
+			if (strcmp(elki->key, elk[i].key) == 0) {
+				elki->thread_stop = 1;
+				list_del(&elki->list);
+				break;
+			}
+		}
+	}
 out:	
 	pthread_mutex_lock(&cl->mutex);
 	/*log_cmd(cmd, "cmd_release %d,%d,%d result %d pid_dead %d",
@@ -252,10 +281,10 @@ out:
 	}
 
 	/* delete elk from etcdlocks list */
-	pthread_mutex_lock(&etcdlocks_mutex);
-	if (!list_empty(&etcdlocks))
-        	list_del(&elk.list);
-	pthread_mutex_unlock(&etcdlocks_mutex);
+	//pthread_mutex_lock(&etcdlocks_mutex);
+	//if (!list_empty(&etcdlocks))
+        //	list_del(&elk[i].list);
+	//pthread_mutex_unlock(&etcdlocks_mutex);
 
 	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);

@@ -60,7 +60,7 @@ static int connect_socket(int *sock_fd)
 	return 0;
 }
 static int send_header(int sock, int cmd, int datalen, 
-	uint32_t data2)
+	               uint32_t data, uint32_t data2)
 {
 	struct em_header header;
 	size_t rem = sizeof(header);
@@ -72,6 +72,7 @@ static int send_header(int sock, int cmd, int datalen,
 	header.version = EM_PROTO;
 	header.cmd = cmd;
 	header.length = sizeof(header) + datalen;
+	header.data = data;
 	header.data2 = data2;
 
 retry:
@@ -125,43 +126,19 @@ retry:
 	return (int)h.data;
 }
 
-int etcdlock_acquire(int sock, char *volume, int vm_pid, char *killpath, char *killargs)
+int etcdlock_acquire(int sock, int res_count, struct etcdlk_resource *res_args[],
+		     int vm_pid, char *killpath, char *killargs)
 {
     struct etcdlock *elk;
-    int rv, fd, data2;
+    int rv, fd, data2, i;
     int datalen = 0;
-	char *value = NULL;
 
-    /* Allocate memory for etcdlock structure */
-    elk = malloc(sizeof(struct etcdlock));
-	if (!elk)
-        return -ENOMEM;
-
-    datalen += sizeof(struct etcdlock);
-
+    fprintf(stderr, "etcdlock_acquire res_count: %d\n", res_count);
     fprintf(stderr, "etcdlock_acquire vm_pid: %d\n", vm_pid);
+    fprintf(stderr, "etcdlock_acquire killpath: %s\n", killpath);
+    fprintf(stderr, "etcdlock_acquire killargs: %s\n", killargs);
 
-    snprintf(elk->value, ETCDLOCK_VALUE_LEN, "%d", vm_pid);
-
-    fprintf(stderr, "etcdlock_acquire volume: %s\n", volume);
-    fprintf(stderr, "etcdlock_acquire elk->value: %s\n", elk->value);
-    
-    memset(elk->key, 0, ETCDLOCK_KEY_LEN);
-    memcpy(elk->key, volume, ETCDLOCK_KEY_LEN-1);
-    elk->key[ETCDLOCK_KEY_LEN-1] = '\0';
-
-    fprintf(stderr, "etcdlock_acquire elk->key: %s\n", elk->key);
-
-    memset(elk->killpath, 0, HELPER_PATH_LEN);
-    memset(elk->killargs, 0, HELPER_ARGS_LEN);
-    memcpy(elk->killpath, killpath, HELPER_PATH_LEN-1);
-    elk->killpath[HELPER_PATH_LEN-1] = '\0';
-    memcpy(elk->killargs, killargs, HELPER_ARGS_LEN-1);
-    elk->killargs[HELPER_ARGS_LEN-1] = '\0';
-
-    /* Add base timeout */
-    //elk->base_timeout = com.base_timeout;
-    elk->base_timeout = 1;
+    datalen += res_count * sizeof(struct etcdlock);
 
     if (sock == -1) {
         /* connect to daemon and ask it to acquire a lease for
@@ -171,9 +148,9 @@ int etcdlock_acquire(int sock, char *volume, int vm_pid, char *killpath, char *k
 
         rv = connect_socket(&fd);
         if (rv < 0){
-			rv = -1;
-			goto out;
-		}           
+		rv = -1;
+		goto out;
+	}           
     } else {
         /* use our own existing registered connection and ask daemon
            to acquire a lease for self */
@@ -182,28 +159,50 @@ int etcdlock_acquire(int sock, char *volume, int vm_pid, char *killpath, char *k
         fd = sock;
     }
 
-    rv = send_header(fd, EM_CMD_ACQUIRE, datalen, data2);
+    rv = send_header(fd, EM_CMD_ACQUIRE, datalen, res_count, data2);
     if (rv < 0){
-		rv = -1;
-		goto out;
-	}
+	rv = -1;
+	goto out;
+    }
 
-    rv = send_data(fd, elk, sizeof(struct etcdlock), 0);
-    if (rv < 0) {
-        rv = -1;
-        goto out;
+    for (i = 0; i < res_count; i++) {
+	/* Allocate memory for etcdlock structure */
+	elk = malloc(sizeof(struct etcdlock));
+	if (!elk)
+        	return -ENOMEM;
+	memset(elk, 0, sizeof(struct etcdlock));
+
+	snprintf(elk->value, ETCDLOCK_VALUE_LEN, "%d", vm_pid);
+
+    	memcpy(elk->key, res_args[i]->name, ETCDLOCK_KEY_LEN-1);
+    	elk->key[ETCDLOCK_KEY_LEN-1] = '\0';
+
+    	memcpy(elk->killpath, killpath, HELPER_PATH_LEN-1);
+    	elk->killpath[HELPER_PATH_LEN-1] = '\0';
+    	memcpy(elk->killargs, killargs, HELPER_ARGS_LEN-1);
+    	elk->killargs[HELPER_ARGS_LEN-1] = '\0';
+
+    	/* Add base timeout */
+    	//elk->base_timeout = com.base_timeout;
+    	elk->base_timeout = 1;
+
+	pthread_mutex_init(&elk->mutex, NULL);
+
+	rv = send_data(fd, elk, sizeof(struct etcdlock), 0);
+       	if (rv < 0) {
+        	rv = -1;
+        	goto out;
+    	}
+	
+	//free(elk);
     }
 
     rv = recv_result(fd);
 out:
     if (sock == -1)
-		close(fd);
+	close(fd);
 
-	if (elk)
-    	free(elk);
-
-	if (value)
-		free(value);
+    free(elk);
 
     return rv;
 }
@@ -212,20 +211,19 @@ out:
    I don't think the pid itself will usually tell em to release leases,
    but it will be requested by a manager overseeing the pid */
 
-int etcdlock_release(int sock, int pid, char *volume)
+int etcdlock_release(int sock, int res_count, struct etcdlk_resource *res_args[], int vm_pid)
 {
 	struct etcdlock *elk;
-    int fd, rv, data2, datalen;
+	int fd, rv, data2, datalen, i;
 
-	elk = malloc(sizeof(struct etcdlock));
-	if (!elk)
-        return -ENOMEM;
+	fprintf(stderr, "etcdlock_release res_count: %d\n", res_count);
+        fprintf(stderr, "etcdlock_release vm_pid: %d\n", vm_pid);
 
 	if (sock == -1) {
 		/* connect to daemon and ask it to acquire a lease for
 		   another registered pid */
 
-		data2 = pid;
+		data2 = vm_pid;
 
 		rv = connect_socket(&fd);
 		if (rv < 0){
@@ -240,24 +238,29 @@ int etcdlock_release(int sock, int pid, char *volume)
 		fd = sock;
 	}
 
-	datalen = sizeof(struct etcdlock);
+	datalen = res_count * sizeof(struct etcdlock);
 
-        memset(elk->key, 0, ETCDLOCK_KEY_LEN);
-        memcpy(elk->key, volume, ETCDLOCK_KEY_LEN-1);
-        elk->key[ETCDLOCK_KEY_LEN-1] = '\0';
-
-	fprintf(stderr, "etcdlock_release elk->key: %s\n", elk->key);
-
-	rv = send_header(fd, EM_CMD_RELEASE, datalen, data2);
+	rv = send_header(fd, EM_CMD_RELEASE, datalen, res_count, data2);
 	if (rv < 0){
 		rv = -1;
 		goto out;
 	}
 
-	rv = send_data(fd, elk, sizeof(struct etcdlock), 0);
-	if (rv < 0) {
-		rv = -1;
-		goto out;
+	for (i = 0; i < res_count; i++) {
+		elk = malloc(sizeof(struct etcdlock));
+        	if (!elk)
+        		return -ENOMEM;
+		memset(elk, 0, sizeof(struct etcdlock));
+
+                memcpy(elk->key, res_args[i]->name, ETCDLOCK_KEY_LEN-1);
+        	elk->key[ETCDLOCK_KEY_LEN-1] = '\0';
+
+                rv = send_data(fd, elk, sizeof(struct etcdlock), 0);
+        	if (rv < 0) {
+                	rv = -1;
+                	goto out;
+        	}
+		//free(elk);
 	}
 
 	rv = recv_result(fd);
@@ -265,8 +268,7 @@ int etcdlock_release(int sock, int pid, char *volume)
 	if (sock == -1)
 		close(fd);
 
-	if (elk)
-		free(elk);
+	free(elk);
 
 	return rv;
 }

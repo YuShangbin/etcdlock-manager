@@ -272,11 +272,36 @@ static void print_usage(void)
 	printf("  -h 0|1        use high priority (RR) scheduling (%d)\n", DEFAULT_HIGH_PRIORITY);
 	printf("  -l <num>      use mlockall (0 none, 1 current, 2 current and future) (%d)\n", DEFAULT_MLOCK_LEVEL);
 	printf("\n");
-	printf("etcdlock_manager client acquire -v <volume> -p <vm_pid> -r <killpath> -i <killargs>\n");
-	printf("etcdlock_manager client release -v <volume> -p <vm_pid>\n");
+	printf("etcdlock_manager client acquire -r <resource> -p <vm_pid> -k <killpath> -s <killargs>\n");
+	printf("etcdlock_manager client release -r <resource> -p <vm_pid>\n");
 	printf("Limits:\n");
 	printf("maximum client process connections: 1000\n"); /* NALLOC */
 	printf("\n");
+}
+
+static int parse_arg_resource(char *arg)
+{
+	struct etcdlk_resource *res;
+
+	if (com.res_count >= ETCDLK_MAX_RESOURCES) {
+		/*log_tool("resource args over max %d", SANLK_MAX_RESOURCES);*/
+		fprintf(stderr, "resource args over max %d\n", ETCDLK_MAX_RESOURCES);
+		return -1;
+	}
+
+	res = malloc(sizeof(struct etcdlk_resource));
+	if (!res) {
+		fprintf(stderr, "parse_arg_resource res malloc failed.\n");
+		return -1;
+	}
+
+	memset(res, 0, sizeof(struct etcdlk_resource));
+	memcpy(res->name, arg, ETCDLK_NAME_LEN);
+
+        com.res_args[com.res_count] = res;
+	com.res_count++;
+
+	return 0;
 }
 
 static int read_command_line(int argc, char *argv[])
@@ -415,19 +440,19 @@ static int read_command_line(int argc, char *argv[])
 			begin_command = 1;
 			break;
 
-		case 'v':
-		    com.volume = strdup(optionarg);
+		case 'r':
+		    parse_arg_resource(optionarg);
 		    break;
 
 		case 'p':
 		    com.vm_pid = atoi(optionarg);
 		    break;
 		
-		case 'r':
+		case 'k':
 		    com.killpath = strdup(optionarg);
 		    break;
 
-		case 'i':
+		case 's':
 		    com.killargs = strdup(optionarg);
 		    break;
 
@@ -759,6 +784,69 @@ static int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
 	}
 
 	return -1;
+}
+
+void client_pid_dead(int ci);
+void client_pid_dead(int ci)
+{
+        struct client *cl = &client[ci];
+        int cmd_active;
+        int i, pid;
+
+        pthread_mutex_lock(&cl->mutex);
+        if (!cl->used || cl->fd == -1 || cl->pid == -1) {
+                /* should never happen */
+                pthread_mutex_unlock(&cl->mutex);
+                /*log_error("client_pid_dead %d,%d,%d u %d a %d s %d bad state",
+                          ci, cl->fd, cl->pid, cl->used,
+                          cl->cmd_active, cl->suspend);*/
+                fprintf(stderr, "client_pid_dead %d,%d,%d u %d a %d s %d bad state\n",
+                          ci, cl->fd, cl->pid, cl->used,
+                          cl->cmd_active, cl->suspend);
+                return;
+        }
+
+        /*log_debug("client_pid_dead %d,%d,%d cmd_active %d suspend %d",
+                  ci, cl->fd, cl->pid, cl->cmd_active, cl->suspend);*/
+        fprintf(stderr, "client_pid_dead %d,%d,%d cmd_active %d suspend %d\n",
+                  ci, cl->fd, cl->pid, cl->cmd_active, cl->suspend);
+
+        if (cl->kill_count)
+                /*log_error("dead %d ci %d count %d", cl->pid, ci, cl->kill_count);*/
+                fprintf(stderr, "dead %d ci %d count %d\n", cl->pid, ci, cl->kill_count);
+
+        cmd_active = cl->cmd_active;
+        pid = cl->pid;
+        cl->pid = -1;
+        cl->pid_dead = 1;
+
+        /* when cmd_active is set and cmd_a,r,i_thread is done and takes
+           cl->mutex to set cl->cmd_active to 0, it will see cl->pid_dead is 1
+           and know they need to release cl->tokens and call client_free */
+
+        /* make poll() ignore this connection */
+        pollfd[ci].fd = -1;
+        pollfd[ci].events = 0;
+
+        pthread_mutex_unlock(&cl->mutex);
+
+        /* it would be nice to do this SIGKILL as a confirmation that the pid
+           is really gone (i.e. didn't just close the fd) if we always had root
+           permission to do it */
+
+        /* kill(pid, SIGKILL); */
+
+        if (cmd_active) {
+                /*log_debug("client_pid_dead %d,%d,%d defer to cmd %d",
+                          ci, cl->fd, pid, cmd_active);*/
+                fprintf(stderr, "client_pid_dead %d,%d,%d defer to cmd %d\n",
+                          ci, cl->fd, pid, cmd_active);
+                return;
+        }
+
+        pthread_mutex_lock(&cl->mutex);
+        _client_free(ci);
+        pthread_mutex_unlock(&cl->mutex);
 }
 
 static void *thread_pool_worker(void *data)
@@ -1754,8 +1842,10 @@ static int main_loop(void)
 				/*log_client(i, client[i].fd, "poll dead");*/
 				fprintf(stderr, "main_loop poll dead\n");
 				deadfn = client[i].deadfn;
-				if (deadfn)
+				if (deadfn) {
+					deadfn = client_pid_dead;
 					deadfn(i);
+				}
 			}
 		}
 
@@ -1775,7 +1865,9 @@ static int main_loop(void)
 		 */
 		pthread_mutex_lock(&etcdlocks_mutex);
 		list_for_each_entry_safe(elk, safe, &etcdlocks, list) {
-
+			fprintf(stderr, "main_loop elk client ci: %d\n", elk->client_ci);
+			fprintf(stderr, "main_loop elk key: %s\n", elk->key);
+                        fprintf(stderr, "main_loop elk killing_pid: %d\n", elk->killing_pid);
 			if (elk->killing_pid && pid_dead(elk)) {
 				/*
 				 * delete elk from etcdlocks so main_loop
@@ -1925,36 +2017,17 @@ static int do_daemon(void)
 
 static int do_client(void)
 {
-	int id = -1;
 	int rv = 0;
 
 	switch (com.action) {
 	case ACT_ACQUIRE:
-		if (com.vm_pid > -1) {
-			/*log_tool("acquire pid %d", com.vm_pid);*/
-			fprintf(stdin, "acquire pid %d\n", com.vm_pid);
-			id = com.vm_pid;
-		} else if (com.cid > -1) {
-			/*log_tool("acquire client_id %d", com.cid);*/
-			fprintf(stdin, "acquire client_id %d\n", com.cid);
-			id = com.cid;
-		}
-		rv = etcdlock_acquire(-1, com.volume, com.vm_pid, com.killpath, com.killargs);
+		rv = etcdlock_acquire(-1, com.res_count, com.res_args, com.vm_pid, com.killpath, com.killargs);
 		/*log_tool("acquire done %d", rv);*/
 		fprintf(stdin, "acquire done %d\n", rv);
 		break;
 
 	case ACT_RELEASE:
-		if (com.vm_pid > -1) {
-			/*log_tool("release pid %d", com.vm_pid);*/
-			fprintf(stdin, "release pid %d\n", com.vm_pid);
-			id = com.vm_pid;
-		} else if (com.cid > -1) {
-			/*log_tool("release client_id %d", com.cid);*/
-			fprintf(stdin, "release client_id %d\n", com.cid);
-			id = com.cid;
-		}
-		rv = etcdlock_release(-1, id, com.volume);
+		rv = etcdlock_release(-1, com.res_count, com.res_args, com.vm_pid);
 		/*log_tool("release done %d", rv);*/
 		fprintf(stdin, "release done %d\n", rv);
 		break;

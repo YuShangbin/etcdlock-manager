@@ -316,7 +316,7 @@ void *lock_thread(void *arg_in)
  
     disconnect_watchdog(elk);
 
-    release_lock(elk->key);
+    //release_lock(elk->key);
  
     return NULL;
 }
@@ -328,6 +328,8 @@ int acquire_lock_start(struct etcdlock *elk)
     int acquire_result, etcdlock_result;
     int keepalive_fail_timeout_seconds;
     int wd_con;
+
+    fprintf(stderr, "acquire_lock_start begin.\n");
 
     keepalive_fail_timeout_seconds = calc_keepalive_fail_timeout_seconds(elk->base_timeout);
 
@@ -377,6 +379,8 @@ int acquire_lock_start(struct etcdlock *elk)
         last_success = monotime();
  
     acquire_result = etcdlock_result;
+
+    fprintf(stderr, "acquire_lock_start acquire_result: %d\n", acquire_result);
  
     /* we need to start the watchdog after we acquire the etcd lock but
         before we allow any pid's to begin running */
@@ -393,7 +397,10 @@ int acquire_lock_start(struct etcdlock *elk)
     //}
  
 //set_status:
+    fprintf(stderr, "acquire_lock_start set_status begin.\n");
+
     pthread_mutex_lock(&elk->mutex);
+    fprintf(stderr, "acquire_lock_start elk key: %s\n", elk->key);
     elk->lease_status.acquire_last_result = acquire_result;
     elk->lease_status.acquire_last_attempt = etcdlock_begin;
     if (etcdlock_result == ETCDLOCK_OK)
@@ -406,11 +413,14 @@ int acquire_lock_start(struct etcdlock *elk)
     save_keepalive_history(elk, etcdlock_result, last_success);
     pthread_mutex_unlock(&elk->mutex);
 
+    fprintf(stderr, "acquire_lock_start set_status finish.\n");
+
     /* If acquire lock successful, start the keepalive thread */
     if (acquire_result == ETCDLOCK_OK) {
 	pthread_mutex_lock(&elk->mutex);
 	elk->thread_stop = 0;
 	pthread_mutex_unlock(&elk->mutex);
+	fprintf(stderr, "acquire_lock_start begin to create keepalive thread.\n");
         rv = pthread_create(&elk->thread, NULL, lock_thread, elk);
         if (rv) {
             /*log_erros(elk, "acquire lock create keepalive thread failed %d", rv);*/
@@ -423,6 +433,7 @@ int acquire_lock_start(struct etcdlock *elk)
 
         /* Add elk to etcdlocks list for main loop to check the lock lease */
         pthread_mutex_lock(&etcdlocks_mutex);
+	fprintf(stderr, "acquire_lock_start elk killing_pid: %d\n", elk->killing_pid);
         list_add(&elk->list, &etcdlocks);
         pthread_mutex_unlock(&etcdlocks_mutex);
 
@@ -450,7 +461,7 @@ int check_etcdlock_lease(struct etcdlock *elk)
     int keepalive_fail_timeout_seconds, keepalive_warn_timeout_seconds;
     uint64_t last_success;
     int gap;
- 
+
     pthread_mutex_lock(&elk->mutex);
     last_success = elk->lease_status.keepalive_last_success;
     pthread_mutex_unlock(&elk->mutex);

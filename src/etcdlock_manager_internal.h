@@ -7,6 +7,7 @@
 
 #include "libvirt_helper.h"
 #include "list.h"
+#include "client.h"
 
 #ifndef GNUC_UNUSED
 #define GNUC_UNUSED __attribute__((__unused__))
@@ -103,7 +104,7 @@ struct command_line {
 	int sh_retries;
 	uint32_t force_mode;
 	int keepalive_history_size;
-	char *volume;
+	struct etcdlk_resource *res_args[ETCDLK_MAX_RESOURCES];
 	int vm_pid;				/* -pid */
 	char *killpath;
 	char *killargs;
@@ -130,7 +131,7 @@ struct lease_status {
 	uint64_t keepalive_last_success;
 };
 
-#define ETCDLOCK_KEY_LEN 40
+#define ETCDLOCK_KEY_LEN 48
 #define ETCDLOCK_VALUE_LEN 10
 
 struct etcdlock {
